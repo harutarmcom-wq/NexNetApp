@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
   Image,
+  Linking,
   Modal,
   Pressable,
   SafeAreaView,
@@ -12,6 +13,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
+
+import Constants from 'expo-constants';
+import * as FileSystem from 'expo-file-system/legacy';
 
 type Product = {
   id: number;
@@ -77,6 +81,34 @@ function formatPrice(price: number) {
   return `${price.toLocaleString('hy-AM')} ֏`;
 }
 
+function isNewerVersion(
+  latest: string,
+  current: string
+) {
+  const latestParts = latest
+    .split('.')
+    .map(Number);
+
+  const currentParts = current
+    .split('.')
+    .map(Number);
+
+  for (let i = 0; i < 3; i++) {
+    const latestNumber = latestParts[i] || 0;
+    const currentNumber = currentParts[i] || 0;
+
+    if (latestNumber > currentNumber) {
+      return true;
+    }
+
+    if (latestNumber < currentNumber) {
+      return false;
+    }
+  }
+
+  return false;
+}
+
 export default function HomeScreen() {
   const [products] = useState<Product[]>(PRODUCTS);
 
@@ -89,8 +121,116 @@ export default function HomeScreen() {
 
   const [cartVisible, setCartVisible] = useState(false);
 
+  // =========================
+  // UPDATE SYSTEM
+  // =========================
+
+  const [updateAvailable, setUpdateAvailable] =
+    useState(false);
+
+  const [latestVersion, setLatestVersion] =
+    useState('');
+
+  const [apkUrl, setApkUrl] =
+    useState('');
+
+  const [downloadingUpdate, setDownloadingUpdate] =
+    useState(false);
+
+  const CURRENT_VERSION =
+    Constants.expoConfig?.version || '1.0.0';
+
+  const UPDATE_URL =
+    'https://raw.githubusercontent.com/harutarmcom-wq/NexNetApp/main/update.json';
+
+  async function checkForUpdate() {
+    try {
+      const response = await fetch(
+        `${UPDATE_URL}?t=${Date.now()}`
+      );
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+
+      if (
+        data.version &&
+        data.apkUrl &&
+        isNewerVersion(
+          data.version,
+          CURRENT_VERSION
+        )
+      ) {
+        setLatestVersion(data.version);
+        setApkUrl(data.apkUrl);
+        setUpdateAvailable(true);
+      }
+    } catch (error) {
+      console.log(
+        'Update check failed:',
+        error
+      );
+    }
+  }
+
+  async function downloadAndInstallUpdate() {
+    if (!apkUrl || downloadingUpdate) {
+      return;
+    }
+
+    try {
+      setDownloadingUpdate(true);
+
+      const apkPath =
+        `${FileSystem.cacheDirectory}NEXNET-${latestVersion}.apk`;
+
+      const downloadResult =
+        await FileSystem.downloadAsync(
+          apkUrl,
+          apkPath
+        );
+
+      if (!downloadResult.uri) {
+        throw new Error(
+          'APK download failed'
+        );
+      }
+
+      const contentUri =
+        await FileSystem.getContentUriAsync(
+          downloadResult.uri
+        );
+
+      await Linking.openURL(contentUri);
+    } catch (error) {
+      console.error(
+        'APK update error:',
+        error
+      );
+
+      Alert.alert(
+        'Թարմացում',
+        'Նոր տարբերակը ներբեռնել չհաջողվեց։'
+      );
+    } finally {
+      setDownloadingUpdate(false);
+    }
+  }
+
+  useEffect(() => {
+    checkForUpdate();
+  }, []);
+
+  // =========================
+  // SEARCH
+  // =========================
+
   const filteredProducts = useMemo(() => {
-    const value = search.trim().toLowerCase();
+    const value = search
+      .trim()
+      .toLowerCase();
 
     if (!value) {
       return products;
@@ -98,13 +238,25 @@ export default function HomeScreen() {
 
     return products.filter((product) => {
       return (
-        product.name.toLowerCase().includes(value) ||
-        product.model.toLowerCase().includes(value) ||
-        product.brand.toLowerCase().includes(value) ||
-        product.type.toLowerCase().includes(value)
+        product.name
+          .toLowerCase()
+          .includes(value) ||
+        product.model
+          .toLowerCase()
+          .includes(value) ||
+        product.brand
+          .toLowerCase()
+          .includes(value) ||
+        product.type
+          .toLowerCase()
+          .includes(value)
       );
     });
   }, [products, search]);
+
+  // =========================
+  // CART
+  // =========================
 
   function addToCart(product: Product) {
     setCart((currentCart) => {
@@ -132,7 +284,10 @@ export default function HomeScreen() {
       ];
     });
 
-    Alert.alert('Ավելացվեց', 'Ապրանքը ավելացվեց զամբյուղում։');
+    Alert.alert(
+      'Ավելացվեց',
+      'Ապրանքը ավելացվեց զամբյուղում։'
+    );
   }
 
   function increaseQuantity(productId: number) {
@@ -159,50 +314,122 @@ export default function HomeScreen() {
               }
             : item
         )
-        .filter((item) => item.quantity > 0)
+        .filter(
+          (item) => item.quantity > 0
+        )
     );
   }
 
   function removeFromCart(productId: number) {
     setCart((currentCart) =>
-      currentCart.filter((item) => item.id !== productId)
+      currentCart.filter(
+        (item) => item.id !== productId
+      )
     );
   }
 
   const cartCount = cart.reduce(
-    (total, item) => total + item.quantity,
+    (total, item) =>
+      total + item.quantity,
     0
   );
 
   const subtotal = cart.reduce(
-    (total, item) => total + item.price * item.quantity,
+    (total, item) =>
+      total +
+      item.price * item.quantity,
     0
   );
 
+  // =========================
+  // UI
+  // =========================
+
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Վերևի header */}
+    <SafeAreaView
+      style={styles.container}
+    >
+      {/* UPDATE BANNER */}
+
+      {updateAvailable && (
+        <View style={styles.updateBanner}>
+          <View
+            style={
+              styles.updateTextContainer
+            }
+          >
+            <Text
+              style={styles.updateTitle}
+            >
+              Նոր տարբերակ կա
+            </Text>
+
+            <Text
+              style={styles.updateSubtitle}
+            >
+              NEXNET {latestVersion}
+            </Text>
+          </View>
+
+          <Pressable
+            style={styles.updateButton}
+            onPress={
+              downloadAndInstallUpdate
+            }
+            disabled={downloadingUpdate}
+          >
+            <Text
+              style={
+                styles.updateButtonText
+              }
+            >
+              {downloadingUpdate
+                ? 'Ներբեռնում...'
+                : 'Թարմացնել'}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* HEADER */}
+
       <View style={styles.header}>
         <View>
-          <Text style={styles.logo}>NEXNET</Text>
-          <Text style={styles.logoSubtitle}>
+          <Text style={styles.logo}>
+            NEXNET
+          </Text>
+
+          <Text
+            style={styles.logoSubtitle}
+          >
             IT • NETWORK • SECURITY
           </Text>
         </View>
 
         <Pressable
           style={styles.cartButton}
-          onPress={() => setCartVisible(true)}
+          onPress={() =>
+            setCartVisible(true)
+          }
         >
-          <Text style={styles.cartButtonText}>
+          <Text
+            style={styles.cartButtonText}
+          >
             🛒 {cartCount}
           </Text>
         </Pressable>
       </View>
 
-      {/* Որոնում */}
-      <View style={styles.searchContainer}>
-        <Text style={styles.searchIcon}>🔎</Text>
+      {/* SEARCH */}
+
+      <View
+        style={styles.searchContainer}
+      >
+        <Text
+          style={styles.searchIcon}
+        >
+          🔎
+        </Text>
 
         <TextInput
           value={search}
@@ -213,45 +440,82 @@ export default function HomeScreen() {
         />
       </View>
 
-      {/* Վերնագիր */}
-      <View style={styles.catalogHeader}>
+      {/* CATALOG HEADER */}
+
+      <View
+        style={styles.catalogHeader}
+      >
         <View>
-          <Text style={styles.catalogTitle}>Ապրանքներ</Text>
-          <Text style={styles.catalogSubtitle}>
+          <Text
+            style={styles.catalogTitle}
+          >
+            Ապրանքներ
+          </Text>
+
+          <Text
+            style={styles.catalogSubtitle}
+          >
             Տեսահսկում • Ցանցային սարքեր • IT
           </Text>
         </View>
 
-        <Text style={styles.productCount}>
+        <Text
+          style={styles.productCount}
+        >
           {filteredProducts.length}
         </Text>
       </View>
 
-      {/* Ապրանքներ */}
+      {/* PRODUCTS */}
+
       <FlatList
         data={filteredProducts}
-        keyExtractor={(item) => String(item.id)}
-        contentContainerStyle={styles.productList}
-        showsVerticalScrollIndicator={false}
+        keyExtractor={(item) =>
+          String(item.id)
+        }
+        contentContainerStyle={
+          styles.productList
+        }
+        showsVerticalScrollIndicator={
+          false
+        }
         renderItem={({ item }) => (
           <Pressable
             style={styles.productCard}
-            onPress={() => setSelectedProduct(item)}
+            onPress={() =>
+              setSelectedProduct(item)
+            }
           >
-            <View style={styles.imageContainer}>
+            <View
+              style={
+                styles.imageContainer
+              }
+            >
               {item.image_url ? (
                 <Image
-                  source={{ uri: item.image_url }}
-                  style={styles.productImage}
+                  source={{
+                    uri: item.image_url,
+                  }}
+                  style={
+                    styles.productImage
+                  }
                   resizeMode="contain"
                 />
               ) : (
-                <Text style={styles.noImage}>📷</Text>
+                <Text
+                  style={styles.noImage}
+                >
+                  📷
+                </Text>
               )}
             </View>
 
-            <View style={styles.productInfo}>
-              <Text style={styles.productType}>
+            <View
+              style={styles.productInfo}
+            >
+              <Text
+                style={styles.productType}
+              >
                 {item.type}
               </Text>
 
@@ -262,17 +526,33 @@ export default function HomeScreen() {
                 {item.name}
               </Text>
 
-              <Text style={styles.productModel}>
+              <Text
+                style={
+                  styles.productModel
+                }
+              >
                 {item.model}
               </Text>
 
-              <Text style={styles.productMegapixel}>
+              <Text
+                style={
+                  styles.productMegapixel
+                }
+              >
                 {item.megapixel}
               </Text>
 
-              <View style={styles.cardBottom}>
-                <Text style={styles.productPrice}>
-                  {formatPrice(item.price)}
+              <View
+                style={styles.cardBottom}
+              >
+                <Text
+                  style={
+                    styles.productPrice
+                  }
+                >
+                  {formatPrice(
+                    item.price
+                  )}
                 </Text>
 
                 <Pressable
@@ -282,7 +562,11 @@ export default function HomeScreen() {
                     addToCart(item);
                   }}
                 >
-                  <Text style={styles.addButtonText}>
+                  <Text
+                    style={
+                      styles.addButtonText
+                    }
+                  >
                     +
                   </Text>
                 </Pressable>
@@ -291,146 +575,244 @@ export default function HomeScreen() {
           </Pressable>
         )}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyIcon}>🔎</Text>
-            <Text style={styles.emptyText}>
+          <View
+            style={
+              styles.emptyContainer
+            }
+          >
+            <Text
+              style={styles.emptyIcon}
+            >
+              🔎
+            </Text>
+
+            <Text
+              style={styles.emptyText}
+            >
               Ապրանք չի գտնվել
             </Text>
           </View>
         }
       />
 
-      {/* Ապրանքի մանրամասներ */}
+      {/* PRODUCT DETAILS */}
+
       <Modal
-        visible={selectedProduct !== null}
+        visible={
+          selectedProduct !== null
+        }
         animationType="slide"
-        onRequestClose={() => setSelectedProduct(null)}
+        onRequestClose={() =>
+          setSelectedProduct(null)
+        }
       >
         {selectedProduct && (
-          <SafeAreaView style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
+          <SafeAreaView
+            style={styles.modalContainer}
+          >
+            <View
+              style={styles.modalHeader}
+            >
               <Pressable
-                onPress={() => setSelectedProduct(null)}
+                onPress={() =>
+                  setSelectedProduct(null)
+                }
               >
-                <Text style={styles.backButton}>‹</Text>
+                <Text
+                  style={styles.backButton}
+                >
+                  ‹
+                </Text>
               </Pressable>
 
-              <Text style={styles.modalHeaderTitle}>
+              <Text
+                style={
+                  styles.modalHeaderTitle
+                }
+              >
                 Ապրանքի մանրամասներ
               </Text>
 
-              <View style={{ width: 40 }} />
+              <View
+                style={{ width: 40 }}
+              />
             </View>
 
             <ScrollView
-              contentContainerStyle={styles.detailsContent}
-              showsVerticalScrollIndicator={false}
+              contentContainerStyle={
+                styles.detailsContent
+              }
+              showsVerticalScrollIndicator={
+                false
+              }
             >
-              <View style={styles.detailsImageContainer}>
+              <View
+                style={
+                  styles.detailsImageContainer
+                }
+              >
                 {selectedProduct.image_url ? (
                   <Image
                     source={{
                       uri: selectedProduct.image_url,
                     }}
-                    style={styles.detailsImage}
+                    style={
+                      styles.detailsImage
+                    }
                     resizeMode="contain"
                   />
                 ) : (
-                  <Text style={styles.detailsNoImage}>
+                  <Text
+                    style={
+                      styles.detailsNoImage
+                    }
+                  >
                     📷
                   </Text>
                 )}
               </View>
 
-              <Text style={styles.detailsType}>
+              <Text
+                style={styles.detailsType}
+              >
                 {selectedProduct.type}
               </Text>
 
-              <Text style={styles.detailsName}>
+              <Text
+                style={styles.detailsName}
+              >
                 {selectedProduct.name}
               </Text>
 
-              <Text style={styles.detailsModel}>
+              <Text
+                style={styles.detailsModel}
+              >
                 {selectedProduct.model}
               </Text>
 
-              <Text style={styles.detailsPrice}>
-                {formatPrice(selectedProduct.price)}
+              <Text
+                style={styles.detailsPrice}
+              >
+                {formatPrice(
+                  selectedProduct.price
+                )}
               </Text>
 
-              <View style={styles.divider} />
+              <View
+                style={styles.divider}
+              />
 
-              <Text style={styles.sectionTitle}>
+              <Text
+                style={styles.sectionTitle}
+              >
                 Տեխնիկական տվյալներ
               </Text>
 
-              <View style={styles.specs}>
+              <View
+                style={styles.specs}
+              >
                 <SpecRow
                   title="Բրենդ"
-                  value={selectedProduct.brand}
+                  value={
+                    selectedProduct.brand
+                  }
                 />
 
                 <SpecRow
                   title="Մոդել"
-                  value={selectedProduct.model}
+                  value={
+                    selectedProduct.model
+                  }
                 />
 
                 <SpecRow
                   title="Տեսակ"
-                  value={selectedProduct.type}
+                  value={
+                    selectedProduct.type
+                  }
                 />
 
                 <SpecRow
                   title="Megapixel"
-                  value={selectedProduct.megapixel}
+                  value={
+                    selectedProduct.megapixel
+                  }
                 />
 
                 {selectedProduct.channels && (
                   <SpecRow
                     title="Channels"
-                    value={selectedProduct.channels}
+                    value={
+                      selectedProduct.channels
+                    }
                   />
                 )}
 
                 {selectedProduct.ports && (
                   <SpecRow
                     title="Ports"
-                    value={selectedProduct.ports}
+                    value={
+                      selectedProduct.ports
+                    }
                   />
                 )}
 
                 {selectedProduct.capacity && (
                   <SpecRow
                     title="Capacity"
-                    value={selectedProduct.capacity}
+                    value={
+                      selectedProduct.capacity
+                    }
                   />
                 )}
 
                 {selectedProduct.category && (
                   <SpecRow
                     title="Կատեգորիա"
-                    value={selectedProduct.category}
+                    value={
+                      selectedProduct.category
+                    }
                   />
                 )}
               </View>
 
               {selectedProduct.description && (
                 <>
-                  <Text style={styles.sectionTitle}>
+                  <Text
+                    style={
+                      styles.sectionTitle
+                    }
+                  >
                     Նկարագրություն
                   </Text>
 
-                  <Text style={styles.description}>
-                    {selectedProduct.description}
+                  <Text
+                    style={
+                      styles.description
+                    }
+                  >
+                    {
+                      selectedProduct.description
+                    }
                   </Text>
                 </>
               )}
 
               <Pressable
-                style={styles.detailsAddButton}
-                onPress={() => addToCart(selectedProduct)}
+                style={
+                  styles.detailsAddButton
+                }
+                onPress={() =>
+                  addToCart(
+                    selectedProduct
+                  )
+                }
               >
-                <Text style={styles.detailsAddButtonText}>
+                <Text
+                  style={
+                    styles.detailsAddButtonText
+                  }
+                >
                   🛒 Ավելացնել զամբյուղ
                 </Text>
               </Pressable>
@@ -439,56 +821,102 @@ export default function HomeScreen() {
         )}
       </Modal>
 
-      {/* Զամբյուղ */}
+      {/* CART */}
+
       <Modal
         visible={cartVisible}
         animationType="slide"
-        onRequestClose={() => setCartVisible(false)}
+        onRequestClose={() =>
+          setCartVisible(false)
+        }
       >
-        <SafeAreaView style={styles.modalContainer}>
-          <View style={styles.modalHeader}>
+        <SafeAreaView
+          style={styles.modalContainer}
+        >
+          <View
+            style={styles.modalHeader}
+          >
             <Pressable
-              onPress={() => setCartVisible(false)}
+              onPress={() =>
+                setCartVisible(false)
+              }
             >
-              <Text style={styles.backButton}>‹</Text>
+              <Text
+                style={styles.backButton}
+              >
+                ‹
+              </Text>
             </Pressable>
 
-            <Text style={styles.modalHeaderTitle}>
+            <Text
+              style={
+                styles.modalHeaderTitle
+              }
+            >
               🛒 Զամբյուղ ({cartCount})
             </Text>
 
-            <View style={{ width: 40 }} />
+            <View
+              style={{ width: 40 }}
+            />
           </View>
 
           {cart.length === 0 ? (
-            <View style={styles.emptyCart}>
-              <Text style={styles.emptyCartIcon}>🛒</Text>
+            <View
+              style={styles.emptyCart}
+            >
+              <Text
+                style={
+                  styles.emptyCartIcon
+                }
+              >
+                🛒
+              </Text>
 
-              <Text style={styles.emptyCartTitle}>
+              <Text
+                style={
+                  styles.emptyCartTitle
+                }
+              >
                 Զամբյուղը դատարկ է
               </Text>
 
-              <Text style={styles.emptyCartText}>
-                Ավելացրու ապրանքներ կատալոգից։
+              <Text
+                style={
+                  styles.emptyCartText
+                }
+              >
+                Ավելացրու ապրանքներ
+                կատալոգից։
               </Text>
             </View>
           ) : (
             <ScrollView
-              contentContainerStyle={styles.cartContent}
-              showsVerticalScrollIndicator={false}
+              contentContainerStyle={
+                styles.cartContent
+              }
+              showsVerticalScrollIndicator={
+                false
+              }
             >
               {cart.map((item) => (
                 <View
                   key={item.id}
                   style={styles.cartItem}
                 >
-                  <View style={styles.cartImageContainer}>
+                  <View
+                    style={
+                      styles.cartImageContainer
+                    }
+                  >
                     {item.image_url ? (
                       <Image
                         source={{
                           uri: item.image_url,
                         }}
-                        style={styles.cartImage}
+                        style={
+                          styles.cartImage
+                        }
                         resizeMode="contain"
                       />
                     ) : (
@@ -496,62 +924,113 @@ export default function HomeScreen() {
                     )}
                   </View>
 
-                  <View style={styles.cartItemInfo}>
+                  <View
+                    style={
+                      styles.cartItemInfo
+                    }
+                  >
                     <Text
-                      style={styles.cartItemName}
+                      style={
+                        styles.cartItemName
+                      }
                       numberOfLines={2}
                     >
                       {item.name}
                     </Text>
 
-                    <Text style={styles.cartItemModel}>
+                    <Text
+                      style={
+                        styles.cartItemModel
+                      }
+                    >
                       {item.model}
                     </Text>
 
-                    <Text style={styles.cartItemPrice}>
-                      {formatPrice(item.price)}
+                    <Text
+                      style={
+                        styles.cartItemPrice
+                      }
+                    >
+                      {formatPrice(
+                        item.price
+                      )}
                     </Text>
 
-                    <View style={styles.quantityRow}>
+                    <View
+                      style={
+                        styles.quantityRow
+                      }
+                    >
                       <Pressable
-                        style={styles.quantityButton}
+                        style={
+                          styles.quantityButton
+                        }
                         onPress={() =>
-                          decreaseQuantity(item.id)
+                          decreaseQuantity(
+                            item.id
+                          )
                         }
                       >
-                        <Text style={styles.quantityText}>
+                        <Text
+                          style={
+                            styles.quantityText
+                          }
+                        >
                           −
                         </Text>
                       </Pressable>
 
-                      <Text style={styles.quantityValue}>
+                      <Text
+                        style={
+                          styles.quantityValue
+                        }
+                      >
                         {item.quantity}
                       </Text>
 
                       <Pressable
-                        style={styles.quantityButton}
+                        style={
+                          styles.quantityButton
+                        }
                         onPress={() =>
-                          increaseQuantity(item.id)
+                          increaseQuantity(
+                            item.id
+                          )
                         }
                       >
-                        <Text style={styles.quantityText}>
+                        <Text
+                          style={
+                            styles.quantityText
+                          }
+                        >
                           +
                         </Text>
                       </Pressable>
 
-                      <Text style={styles.itemTotal}>
+                      <Text
+                        style={
+                          styles.itemTotal
+                        }
+                      >
                         {formatPrice(
-                          item.price * item.quantity
+                          item.price *
+                            item.quantity
                         )}
                       </Text>
                     </View>
 
                     <Pressable
                       onPress={() =>
-                        removeFromCart(item.id)
+                        removeFromCart(
+                          item.id
+                        )
                       }
                     >
-                      <Text style={styles.removeText}>
+                      <Text
+                        style={
+                          styles.removeText
+                        }
+                      >
                         Հեռացնել
                       </Text>
                     </Pressable>
@@ -559,41 +1038,90 @@ export default function HomeScreen() {
                 </View>
               ))}
 
-              <View style={styles.summary}>
-                <Text style={styles.summaryTitle}>
+              <View
+                style={styles.summary}
+              >
+                <Text
+                  style={
+                    styles.summaryTitle
+                  }
+                >
                   Ամփոփում
                 </Text>
 
-                <View style={styles.summaryRow}>
-                  <Text>Ենթագումար</Text>
-                  <Text>{formatPrice(subtotal)}</Text>
+                <View
+                  style={styles.summaryRow}
+                >
+                  <Text>
+                    Ենթագումար
+                  </Text>
+
+                  <Text>
+                    {formatPrice(
+                      subtotal
+                    )}
+                  </Text>
                 </View>
 
-                <View style={styles.summaryRow}>
-                  <Text>Տեղադրման / աշխատանքի գին</Text>
-                  <Text>0 ֏</Text>
+                <View
+                  style={styles.summaryRow}
+                >
+                  <Text>
+                    Տեղադրման / աշխատանքի գին
+                  </Text>
+
+                  <Text>
+                    0 ֏
+                  </Text>
                 </View>
 
-                <View style={styles.summaryRow}>
-                  <Text>Զեղչ</Text>
-                  <Text>0 ֏</Text>
+                <View
+                  style={styles.summaryRow}
+                >
+                  <Text>
+                    Զեղչ
+                  </Text>
+
+                  <Text>
+                    0 ֏
+                  </Text>
                 </View>
 
-                <View style={styles.summaryDivider} />
+                <View
+                  style={
+                    styles.summaryDivider
+                  }
+                />
 
-                <View style={styles.summaryTotalRow}>
-                  <Text style={styles.summaryTotalLabel}>
+                <View
+                  style={
+                    styles.summaryTotalRow
+                  }
+                >
+                  <Text
+                    style={
+                      styles.summaryTotalLabel
+                    }
+                  >
                     Ընդհանուր
                   </Text>
 
-                  <Text style={styles.summaryTotal}>
-                    {formatPrice(subtotal)}
+                  <Text
+                    style={
+                      styles.summaryTotal
+                    }
+                  >
+                    {formatPrice(
+                      subtotal
+                    )}
                   </Text>
                 </View>
               </View>
 
               <Pressable
-                style={styles.orderButton}
+                style={
+                  styles.orderButton
+                }
                 onPress={() =>
                   Alert.alert(
                     'Պատվեր',
@@ -601,16 +1129,28 @@ export default function HomeScreen() {
                   )
                 }
               >
-                <Text style={styles.orderButtonText}>
+                <Text
+                  style={
+                    styles.orderButtonText
+                  }
+                >
                   Պատվեր ձևակերպել
                 </Text>
               </Pressable>
 
               <Pressable
-                style={styles.clearButton}
-                onPress={() => setCart([])}
+                style={
+                  styles.clearButton
+                }
+                onPress={() =>
+                  setCart([])
+                }
               >
-                <Text style={styles.clearButtonText}>
+                <Text
+                  style={
+                    styles.clearButtonText
+                  }
+                >
                   Մաքրել զամբյուղը
                 </Text>
               </Pressable>
@@ -634,9 +1174,20 @@ function SpecRow({
   }
 
   return (
-    <View style={styles.specRow}>
-      <Text style={styles.specTitle}>{title}</Text>
-      <Text style={styles.specValue}>{value}</Text>
+    <View
+      style={styles.specRow}
+    >
+      <Text
+        style={styles.specTitle}
+      >
+        {title}
+      </Text>
+
+      <Text
+        style={styles.specValue}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
@@ -645,6 +1196,49 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f5f6f8',
+  },
+
+  updateBanner: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#dfe3e8',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+
+  updateTextContainer: {
+    flex: 1,
+    marginRight: 10,
+  },
+
+  updateTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+
+  updateSubtitle: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 3,
+  },
+
+  updateButton: {
+    backgroundColor: '#111827',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+
+  updateButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
   },
 
   header: {
@@ -1103,7 +1697,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 11,
-    color: '#4b5563',
   },
 
   summaryDivider: {
