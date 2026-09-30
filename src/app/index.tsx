@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
+import { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   Linking,
   Modal,
@@ -12,96 +14,72 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-
-import Constants from 'expo-constants';
-import * as FileSystem from 'expo-file-system/legacy';
+} from "react-native";
 
 type Product = {
   id: number;
   name: string;
-  model: string;
-  brand: string;
-  type: string;
-  megapixel: string;
+  model?: string | null;
+  brand?: string | null;
+  category?: string | null;
+  type?: string | null;
+  megapixel?: string | null;
+  channels?: string | null;
+  ports?: string | null;
+  capacity?: string | null;
+  description?: string | null;
   price: number;
+  stock?: number;
   image_url?: string | null;
-  description?: string;
-  category?: string;
-  channels?: string;
-  ports?: string;
-  capacity?: string;
 };
 
 type CartItem = Product & {
   quantity: number;
 };
 
-// Ժամանակավոր ապրանքներ՝ դիզայնը ստուգելու համար
-const PRODUCTS: Product[] = [
-  {
-    id: 1,
-    name: 'Dahua IP Camera 4MP',
-    model: 'DH-IPC-B1B40P',
-    brand: 'Dahua',
-    type: 'IP Camera',
-    megapixel: '4MP',
-    price: 35000,
-    description:
-      '4MP IP տեսախցիկ՝ արտաքին և ներքին տեսահսկման համակարգերի համար։',
-    category: 'Տեսահսկում',
-  },
-  {
-    id: 2,
-    name: 'Dahua Full Color Camera',
-    model: 'DH-IPC-HFW2549SP-S-IL-0280B',
-    brand: 'Dahua',
-    type: 'IP Camera',
-    megapixel: '5MP',
-    price: 52000,
-    description:
-      'Full Color IP տեսախցիկ՝ բարձր որակի գիշերային պատկերմամբ։',
-    category: 'Տեսահսկում',
-  },
-  {
-    id: 3,
-    name: 'Dahua 8MP Camera',
-    model: 'DH-IPC-HFW2849SP-S-IL-0280B',
-    brand: 'Dahua',
-    type: 'IP Camera',
-    megapixel: '8MP',
-    price: 68000,
-    description:
-      '8MP բարձր լուծաչափով IP տեսախցիկ՝ պրոֆեսիոնալ տեսահսկման համար։',
-    category: 'Տեսահսկում',
-  },
-];
+const API_URL = "https://pure-fine-exceptions-voices.trycloudflare.com";
 
-function formatPrice(price: number) {
-  return `${price.toLocaleString('hy-AM')} ֏`;
+const CURRENT_VERSION =
+  Constants.expoConfig?.version || "1.0.1";
+
+const UPDATE_URL =
+  "https://raw.githubusercontent.com/harutarmcom-wq/NexNetApp/main/update.json";
+
+function getImageUrl(imageUrl?: string | null) {
+  if (!imageUrl) {
+    return null;
+  }
+
+  if (imageUrl.startsWith("http")) {
+    return imageUrl;
+  }
+
+  const normalized = imageUrl.replaceAll("\\", "/");
+
+  return `${API_URL}/${normalized.replace(/^\/+/, "")}`;
 }
 
 function isNewerVersion(
-  latest: string,
-  current: string
+  latestVersion: string,
+  currentVersion: string
 ) {
-  const latestParts = latest
-    .split('.')
+  const latest = latestVersion
+    .split(".")
     .map(Number);
 
-  const currentParts = current
-    .split('.')
+  const current = currentVersion
+    .split(".")
     .map(Number);
 
   for (let i = 0; i < 3; i++) {
-    const latestNumber = latestParts[i] || 0;
-    const currentNumber = currentParts[i] || 0;
+    const latestPart = latest[i] || 0;
+    const currentPart = current[i] || 0;
 
-    if (latestNumber > currentNumber) {
+    if (latestPart > currentPart) {
       return true;
     }
 
-    if (latestNumber < currentNumber) {
+    if (latestPart < currentPart) {
       return false;
     }
   }
@@ -110,38 +88,54 @@ function isNewerVersion(
 }
 
 export default function HomeScreen() {
-  const [products] = useState<Product[]>(PRODUCTS);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  const [productsError, setProductsError] = useState("");
 
-  const [search, setSearch] = useState('');
-
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [search, setSearch] = useState("");
 
   const [selectedProduct, setSelectedProduct] =
     useState<Product | null>(null);
 
-  const [cartVisible, setCartVisible] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>([]);
 
-  // =========================
-  // UPDATE SYSTEM
-  // =========================
-
-  const [updateAvailable, setUpdateAvailable] =
-    useState(false);
+  const [showCart, setShowCart] = useState(false);
 
   const [latestVersion, setLatestVersion] =
-    useState('');
+    useState<string | null>(null);
 
-  const [apkUrl, setApkUrl] =
-    useState('');
+  const [latestApkUrl, setLatestApkUrl] =
+    useState<string | null>(null);
 
   const [downloadingUpdate, setDownloadingUpdate] =
     useState(false);
 
-  const CURRENT_VERSION =
-    Constants.expoConfig?.version || '1.0.0';
+  async function loadProducts() {
+    try {
+      setLoadingProducts(true);
+      setProductsError("");
 
-  const UPDATE_URL =
-    'https://raw.githubusercontent.com/harutarmcom-wq/NexNetApp/main/update.json';
+      const response = await fetch(
+        `${API_URL}/products/`
+      );
+
+      if (!response.ok) {
+        throw new Error("Products request failed");
+      }
+
+      const data = await response.json();
+
+      setProducts(data);
+    } catch (error) {
+      console.error(error);
+
+      setProductsError(
+        "Ապրանքները բեռնել չհաջողվեց։ Ստուգիր ինտերնետ կապը։"
+      );
+    } finally {
+      setLoadingProducts(false);
+    }
+  }
 
   async function checkForUpdate() {
     try {
@@ -164,37 +158,41 @@ export default function HomeScreen() {
         )
       ) {
         setLatestVersion(data.version);
-        setApkUrl(data.apkUrl);
-        setUpdateAvailable(true);
+        setLatestApkUrl(data.apkUrl);
       }
     } catch (error) {
       console.log(
-        'Update check failed:',
+        "Update check failed:",
         error
       );
     }
   }
 
   async function downloadAndInstallUpdate() {
-    if (!apkUrl || downloadingUpdate) {
+    if (!latestApkUrl || downloadingUpdate) {
       return;
     }
 
     try {
       setDownloadingUpdate(true);
 
-      const apkPath =
-        `${FileSystem.cacheDirectory}NEXNET-${latestVersion}.apk`;
+      const filename =
+        `NEXNET-${latestVersion || "update"}.apk`;
+
+      const destination =
+        `${FileSystem.cacheDirectory}${filename}`;
 
       const downloadResult =
         await FileSystem.downloadAsync(
-          apkUrl,
-          apkPath
+          latestApkUrl,
+          destination
         );
 
-      if (!downloadResult.uri) {
+      if (
+        !downloadResult.uri
+      ) {
         throw new Error(
-          'APK download failed'
+          "APK download failed"
         );
       }
 
@@ -205,14 +203,11 @@ export default function HomeScreen() {
 
       await Linking.openURL(contentUri);
     } catch (error) {
-      console.error(
-        'APK update error:',
-        error
-      );
+      console.error(error);
 
       Alert.alert(
-        'Թարմացում',
-        'Նոր տարբերակը ներբեռնել չհաջողվեց։'
+        "Թարմացման սխալ",
+        "APK-ն ներբեռնել կամ տեղադրել չհաջողվեց։"
       );
     } finally {
       setDownloadingUpdate(false);
@@ -220,58 +215,79 @@ export default function HomeScreen() {
   }
 
   useEffect(() => {
+    loadProducts();
     checkForUpdate();
   }, []);
 
-  // =========================
-  // SEARCH
-  // =========================
+  const filteredProducts =
+    useMemo(() => {
+      const query =
+        search.trim().toLowerCase();
 
-  const filteredProducts = useMemo(() => {
-    const value = search
-      .trim()
-      .toLowerCase();
+      if (!query) {
+        return products;
+      }
 
-    if (!value) {
-      return products;
-    }
+      return products.filter(
+        (product) => {
+          const text = [
+            product.name,
+            product.model,
+            product.brand,
+            product.category,
+            product.type,
+            product.megapixel,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
 
-    return products.filter((product) => {
-      return (
-        product.name
-          .toLowerCase()
-          .includes(value) ||
-        product.model
-          .toLowerCase()
-          .includes(value) ||
-        product.brand
-          .toLowerCase()
-          .includes(value) ||
-        product.type
-          .toLowerCase()
-          .includes(value)
+          return text.includes(query);
+        }
       );
-    });
-  }, [products, search]);
+    },
+    [products, search]);
 
-  // =========================
-  // CART
-  // =========================
+  const cartCount = cart.reduce(
+    (total, item) =>
+      total + item.quantity,
+    0
+  );
+
+  const subtotal = cart.reduce(
+    (total, item) =>
+      total +
+      Number(item.price || 0) *
+        item.quantity,
+    0
+  );
+
+  const installationPrice = 0;
+  const discount = 0;
+
+  const finalTotal =
+    subtotal +
+    installationPrice -
+    discount;
 
   function addToCart(product: Product) {
     setCart((currentCart) => {
-      const existing = currentCart.find(
-        (item) => item.id === product.id
-      );
+      const existing =
+        currentCart.find(
+          (item) =>
+            item.id === product.id
+        );
 
       if (existing) {
-        return currentCart.map((item) =>
-          item.id === product.id
-            ? {
-                ...item,
-                quantity: item.quantity + 1,
-              }
-            : item
+        return currentCart.map(
+          (item) =>
+            item.id === product.id
+              ? {
+                  ...item,
+                  quantity:
+                    item.quantity + 1,
+                }
+              : item
         );
       }
 
@@ -284,908 +300,906 @@ export default function HomeScreen() {
       ];
     });
 
-    Alert.alert(
-      'Ավելացվեց',
-      'Ապրանքը ավելացվեց զամբյուղում։'
-    );
+    setSelectedProduct(null);
   }
 
-  function increaseQuantity(productId: number) {
+  function increaseQuantity(
+    productId: number
+  ) {
     setCart((currentCart) =>
       currentCart.map((item) =>
         item.id === productId
           ? {
               ...item,
-              quantity: item.quantity + 1,
+              quantity:
+                item.quantity + 1,
             }
           : item
       )
     );
   }
 
-  function decreaseQuantity(productId: number) {
+  function decreaseQuantity(
+    productId: number
+  ) {
     setCart((currentCart) =>
       currentCart
         .map((item) =>
           item.id === productId
             ? {
                 ...item,
-                quantity: item.quantity - 1,
+                quantity:
+                  item.quantity - 1,
               }
             : item
         )
         .filter(
-          (item) => item.quantity > 0
+          (item) =>
+            item.quantity > 0
         )
     );
   }
 
-  function removeFromCart(productId: number) {
+  function removeFromCart(
+    productId: number
+  ) {
     setCart((currentCart) =>
       currentCart.filter(
-        (item) => item.id !== productId
+        (item) =>
+          item.id !== productId
       )
     );
   }
 
-  const cartCount = cart.reduce(
-    (total, item) =>
-      total + item.quantity,
-    0
-  );
-
-  const subtotal = cart.reduce(
-    (total, item) =>
-      total +
-      item.price * item.quantity,
-    0
-  );
-
-  // =========================
-  // UI
-  // =========================
+  function formatPrice(price: number) {
+    return `${Number(price || 0).toLocaleString(
+      "en-US"
+    )} ֏`;
+  }
 
   return (
-    <SafeAreaView
-      style={styles.container}
-    >
-      {/* UPDATE BANNER */}
-
-      {updateAvailable && (
-        <View style={styles.updateBanner}>
-          <View
-            style={
-              styles.updateTextContainer
-            }
-          >
-            <Text
-              style={styles.updateTitle}
-            >
-              Նոր տարբերակ կա
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.logo}>
+              NEXNET
             </Text>
 
-            <Text
-              style={styles.updateSubtitle}
-            >
-              NEXNET {latestVersion}
+            <Text style={styles.logoSub}>
+              SECURITY
             </Text>
           </View>
 
           <Pressable
-            style={styles.updateButton}
-            onPress={
-              downloadAndInstallUpdate
-            }
-            disabled={downloadingUpdate}
-          >
-            <Text
-              style={
-                styles.updateButtonText
-              }
-            >
-              {downloadingUpdate
-                ? 'Ներբեռնում...'
-                : 'Թարմացնել'}
-            </Text>
-          </Pressable>
-        </View>
-      )}
-
-      {/* HEADER */}
-
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.logo}>
-            NEXNET
-          </Text>
-
-          <Text
-            style={styles.logoSubtitle}
-          >
-            IT • NETWORK • SECURITY
-          </Text>
-        </View>
-
-        <Pressable
-          style={styles.cartButton}
-          onPress={() =>
-            setCartVisible(true)
-          }
-        >
-          <Text
-            style={styles.cartButtonText}
-          >
-            🛒 {cartCount}
-          </Text>
-        </Pressable>
-      </View>
-
-      {/* SEARCH */}
-
-      <View
-        style={styles.searchContainer}
-      >
-        <Text
-          style={styles.searchIcon}
-        >
-          🔎
-        </Text>
-
-        <TextInput
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Փնտրել ապրանք..."
-          placeholderTextColor="#888"
-          style={styles.searchInput}
-        />
-      </View>
-
-      {/* CATALOG HEADER */}
-
-      <View
-        style={styles.catalogHeader}
-      >
-        <View>
-          <Text
-            style={styles.catalogTitle}
-          >
-            Ապրանքներ
-          </Text>
-
-          <Text
-            style={styles.catalogSubtitle}
-          >
-            Տեսահսկում • Ցանցային սարքեր • IT
-          </Text>
-        </View>
-
-        <Text
-          style={styles.productCount}
-        >
-          {filteredProducts.length}
-        </Text>
-      </View>
-
-      {/* PRODUCTS */}
-
-      <FlatList
-        data={filteredProducts}
-        keyExtractor={(item) =>
-          String(item.id)
-        }
-        contentContainerStyle={
-          styles.productList
-        }
-        showsVerticalScrollIndicator={
-          false
-        }
-        renderItem={({ item }) => (
-          <Pressable
-            style={styles.productCard}
+            style={styles.cartButton}
             onPress={() =>
-              setSelectedProduct(item)
+              setShowCart(true)
             }
           >
-            <View
-              style={
-                styles.imageContainer
-              }
-            >
-              {item.image_url ? (
-                <Image
-                  source={{
-                    uri: item.image_url,
-                  }}
-                  style={
-                    styles.productImage
-                  }
-                  resizeMode="contain"
-                />
-              ) : (
-                <Text
-                  style={styles.noImage}
-                >
-                  📷
-                </Text>
-              )}
-            </View>
-
-            <View
-              style={styles.productInfo}
-            >
-              <Text
-                style={styles.productType}
-              >
-                {item.type}
-              </Text>
-
-              <Text
-                style={styles.productName}
-                numberOfLines={2}
-              >
-                {item.name}
-              </Text>
-
-              <Text
-                style={
-                  styles.productModel
-                }
-              >
-                {item.model}
-              </Text>
-
-              <Text
-                style={
-                  styles.productMegapixel
-                }
-              >
-                {item.megapixel}
-              </Text>
-
-              <View
-                style={styles.cardBottom}
-              >
-                <Text
-                  style={
-                    styles.productPrice
-                  }
-                >
-                  {formatPrice(
-                    item.price
-                  )}
-                </Text>
-
-                <Pressable
-                  style={styles.addButton}
-                  onPress={(event) => {
-                    event.stopPropagation();
-                    addToCart(item);
-                  }}
-                >
-                  <Text
-                    style={
-                      styles.addButtonText
-                    }
-                  >
-                    +
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-          </Pressable>
-        )}
-        ListEmptyComponent={
-          <View
-            style={
-              styles.emptyContainer
-            }
-          >
-            <Text
-              style={styles.emptyIcon}
-            >
-              🔎
-            </Text>
-
-            <Text
-              style={styles.emptyText}
-            >
-              Ապրանք չի գտնվել
-            </Text>
-          </View>
-        }
-      />
-
-      {/* PRODUCT DETAILS */}
-
-      <Modal
-        visible={
-          selectedProduct !== null
-        }
-        animationType="slide"
-        onRequestClose={() =>
-          setSelectedProduct(null)
-        }
-      >
-        {selectedProduct && (
-          <SafeAreaView
-            style={styles.modalContainer}
-          >
-            <View
-              style={styles.modalHeader}
-            >
-              <Pressable
-                onPress={() =>
-                  setSelectedProduct(null)
-                }
-              >
-                <Text
-                  style={styles.backButton}
-                >
-                  ‹
-                </Text>
-              </Pressable>
-
-              <Text
-                style={
-                  styles.modalHeaderTitle
-                }
-              >
-                Ապրանքի մանրամասներ
-              </Text>
-
-              <View
-                style={{ width: 40 }}
-              />
-            </View>
-
-            <ScrollView
-              contentContainerStyle={
-                styles.detailsContent
-              }
-              showsVerticalScrollIndicator={
-                false
-              }
-            >
-              <View
-                style={
-                  styles.detailsImageContainer
-                }
-              >
-                {selectedProduct.image_url ? (
-                  <Image
-                    source={{
-                      uri: selectedProduct.image_url,
-                    }}
-                    style={
-                      styles.detailsImage
-                    }
-                    resizeMode="contain"
-                  />
-                ) : (
-                  <Text
-                    style={
-                      styles.detailsNoImage
-                    }
-                  >
-                    📷
-                  </Text>
-                )}
-              </View>
-
-              <Text
-                style={styles.detailsType}
-              >
-                {selectedProduct.type}
-              </Text>
-
-              <Text
-                style={styles.detailsName}
-              >
-                {selectedProduct.name}
-              </Text>
-
-              <Text
-                style={styles.detailsModel}
-              >
-                {selectedProduct.model}
-              </Text>
-
-              <Text
-                style={styles.detailsPrice}
-              >
-                {formatPrice(
-                  selectedProduct.price
-                )}
-              </Text>
-
-              <View
-                style={styles.divider}
-              />
-
-              <Text
-                style={styles.sectionTitle}
-              >
-                Տեխնիկական տվյալներ
-              </Text>
-
-              <View
-                style={styles.specs}
-              >
-                <SpecRow
-                  title="Բրենդ"
-                  value={
-                    selectedProduct.brand
-                  }
-                />
-
-                <SpecRow
-                  title="Մոդել"
-                  value={
-                    selectedProduct.model
-                  }
-                />
-
-                <SpecRow
-                  title="Տեսակ"
-                  value={
-                    selectedProduct.type
-                  }
-                />
-
-                <SpecRow
-                  title="Megapixel"
-                  value={
-                    selectedProduct.megapixel
-                  }
-                />
-
-                {selectedProduct.channels && (
-                  <SpecRow
-                    title="Channels"
-                    value={
-                      selectedProduct.channels
-                    }
-                  />
-                )}
-
-                {selectedProduct.ports && (
-                  <SpecRow
-                    title="Ports"
-                    value={
-                      selectedProduct.ports
-                    }
-                  />
-                )}
-
-                {selectedProduct.capacity && (
-                  <SpecRow
-                    title="Capacity"
-                    value={
-                      selectedProduct.capacity
-                    }
-                  />
-                )}
-
-                {selectedProduct.category && (
-                  <SpecRow
-                    title="Կատեգորիա"
-                    value={
-                      selectedProduct.category
-                    }
-                  />
-                )}
-              </View>
-
-              {selectedProduct.description && (
-                <>
-                  <Text
-                    style={
-                      styles.sectionTitle
-                    }
-                  >
-                    Նկարագրություն
-                  </Text>
-
-                  <Text
-                    style={
-                      styles.description
-                    }
-                  >
-                    {
-                      selectedProduct.description
-                    }
-                  </Text>
-                </>
-              )}
-
-              <Pressable
-                style={
-                  styles.detailsAddButton
-                }
-                onPress={() =>
-                  addToCart(
-                    selectedProduct
-                  )
-                }
-              >
-                <Text
-                  style={
-                    styles.detailsAddButtonText
-                  }
-                >
-                  🛒 Ավելացնել զամբյուղ
-                </Text>
-              </Pressable>
-            </ScrollView>
-          </SafeAreaView>
-        )}
-      </Modal>
-
-      {/* CART */}
-
-      <Modal
-        visible={cartVisible}
-        animationType="slide"
-        onRequestClose={() =>
-          setCartVisible(false)
-        }
-      >
-        <SafeAreaView
-          style={styles.modalContainer}
-        >
-          <View
-            style={styles.modalHeader}
-          >
-            <Pressable
-              onPress={() =>
-                setCartVisible(false)
-              }
-            >
-              <Text
-                style={styles.backButton}
-              >
-                ‹
-              </Text>
-            </Pressable>
-
-            <Text
-              style={
-                styles.modalHeaderTitle
-              }
-            >
+            <Text style={styles.cartButtonText}>
               🛒 Զամբյուղ ({cartCount})
             </Text>
+          </Pressable>
+        </View>
 
-            <View
-              style={{ width: 40 }}
-            />
-          </View>
-
-          {cart.length === 0 ? (
-            <View
-              style={styles.emptyCart}
-            >
-              <Text
-                style={
-                  styles.emptyCartIcon
-                }
-              >
-                🛒
+        {latestVersion && (
+          <View style={styles.updateBanner}>
+            <View style={styles.updateTextBox}>
+              <Text style={styles.updateTitle}>
+                🔔 Նոր տարբերակ կա
               </Text>
 
-              <Text
-                style={
-                  styles.emptyCartTitle
-                }
-              >
-                Զամբյուղը դատարկ է
-              </Text>
-
-              <Text
-                style={
-                  styles.emptyCartText
-                }
-              >
-                Ավելացրու ապրանքներ
-                կատալոգից։
+              <Text style={styles.updateVersion}>
+                NEXNET {latestVersion}
               </Text>
             </View>
-          ) : (
-            <ScrollView
-              contentContainerStyle={
-                styles.cartContent
+
+            <Pressable
+              style={styles.updateButton}
+              onPress={
+                downloadAndInstallUpdate
               }
-              showsVerticalScrollIndicator={
-                false
+              disabled={
+                downloadingUpdate
               }
             >
-              {cart.map((item) => (
-                <View
-                  key={item.id}
-                  style={styles.cartItem}
+              {downloadingUpdate ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text
+                  style={
+                    styles.updateButtonText
+                  }
                 >
-                  <View
-                    style={
-                      styles.cartImageContainer
-                    }
-                  >
-                    {item.image_url ? (
-                      <Image
-                        source={{
-                          uri: item.image_url,
-                        }}
+                  Թարմացնել
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        <View style={styles.searchContainer}>
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Փնտրել ապրանք..."
+            placeholderTextColor="#8b8f98"
+            style={styles.searchInput}
+          />
+        </View>
+
+        {loadingProducts ? (
+          <View style={styles.center}>
+            <ActivityIndicator
+              size="large"
+              color="#208AEF"
+            />
+
+            <Text style={styles.loadingText}>
+              Ապրանքները բեռնվում են...
+            </Text>
+          </View>
+        ) : productsError ? (
+          <View style={styles.center}>
+            <Text style={styles.errorText}>
+              {productsError}
+            </Text>
+
+            <Pressable
+              style={styles.retryButton}
+              onPress={loadProducts}
+            >
+              <Text style={styles.retryText}>
+                Կրկին փորձել
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          <ScrollView
+            showsVerticalScrollIndicator={
+              false
+            }
+            contentContainerStyle={
+              styles.productsContainer
+            }
+          >
+            {filteredProducts.length ===
+            0 ? (
+              <View style={styles.center}>
+                <Text style={styles.emptyText}>
+                  Ապրանք չի գտնվել։
+                </Text>
+              </View>
+            ) : (
+              filteredProducts.map(
+                (product) => {
+                  const image =
+                    getImageUrl(
+                      product.image_url
+                    );
+
+                  return (
+                    <Pressable
+                      key={product.id}
+                      style={
+                        styles.productCard
+                      }
+                      onPress={() =>
+                        setSelectedProduct(
+                          product
+                        )
+                      }
+                    >
+                      <View
                         style={
-                          styles.cartImage
-                        }
-                        resizeMode="contain"
-                      />
-                    ) : (
-                      <Text>📷</Text>
-                    )}
-                  </View>
-
-                  <View
-                    style={
-                      styles.cartItemInfo
-                    }
-                  >
-                    <Text
-                      style={
-                        styles.cartItemName
-                      }
-                      numberOfLines={2}
-                    >
-                      {item.name}
-                    </Text>
-
-                    <Text
-                      style={
-                        styles.cartItemModel
-                      }
-                    >
-                      {item.model}
-                    </Text>
-
-                    <Text
-                      style={
-                        styles.cartItemPrice
-                      }
-                    >
-                      {formatPrice(
-                        item.price
-                      )}
-                    </Text>
-
-                    <View
-                      style={
-                        styles.quantityRow
-                      }
-                    >
-                      <Pressable
-                        style={
-                          styles.quantityButton
-                        }
-                        onPress={() =>
-                          decreaseQuantity(
-                            item.id
-                          )
+                          styles.productImageBox
                         }
                       >
-                        <Text
-                          style={
-                            styles.quantityText
-                          }
-                        >
-                          −
-                        </Text>
-                      </Pressable>
+                        {image ? (
+                          <Image
+                            source={{
+                              uri: image,
+                            }}
+                            style={
+                              styles.productImage
+                            }
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <View
+                            style={
+                              styles.noImage
+                            }
+                          >
+                            <Text
+                              style={
+                                styles.noImageText
+                              }
+                            >
+                              NEXNET
+                            </Text>
+                          </View>
+                        )}
+                      </View>
 
                       <Text
                         style={
-                          styles.quantityValue
+                          styles.productType
                         }
                       >
-                        {item.quantity}
+                        {product.type ||
+                          product.category ||
+                          "Ապրանք"}
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.productName
+                        }
+                        numberOfLines={2}
+                      >
+                        {product.name}
+                      </Text>
+
+                      {product.model && (
+                        <Text
+                          style={
+                            styles.productModel
+                          }
+                          numberOfLines={1}
+                        >
+                          {product.model}
+                        </Text>
+                      )}
+
+                      {product.megapixel && (
+                        <Text
+                          style={
+                            styles.productSpec
+                          }
+                        >
+                          {product.megapixel}
+                        </Text>
+                      )}
+
+                      <Text
+                        style={
+                          styles.productPrice
+                        }
+                      >
+                        {formatPrice(
+                          product.price
+                        )}
                       </Text>
 
                       <Pressable
                         style={
-                          styles.quantityButton
+                          styles.addButton
                         }
                         onPress={() =>
-                          increaseQuantity(
-                            item.id
-                          )
+                          addToCart(product)
                         }
                       >
                         <Text
                           style={
-                            styles.quantityText
+                            styles.addButtonText
                           }
                         >
-                          +
+                          Ավելացնել զամբյուղ
                         </Text>
                       </Pressable>
+                    </Pressable>
+                  );
+                }
+              )
+            )}
+          </ScrollView>
+        )}
+
+        <Modal
+          visible={
+            selectedProduct !== null
+          }
+          animationType="slide"
+          onRequestClose={() =>
+            setSelectedProduct(null)
+          }
+        >
+          {selectedProduct && (
+            <SafeAreaView
+              style={styles.modalSafe}
+            >
+              <ScrollView
+                contentContainerStyle={
+                  styles.detailsContainer
+                }
+              >
+                <Pressable
+                  style={
+                    styles.backButton
+                  }
+                  onPress={() =>
+                    setSelectedProduct(
+                      null
+                    )
+                  }
+                >
+                  <Text
+                    style={
+                      styles.backButtonText
+                    }
+                  >
+                    ← Վերադառնալ
+                  </Text>
+                </Pressable>
+
+                <View
+                  style={
+                    styles.detailsImageBox
+                  }
+                >
+                  {getImageUrl(
+                    selectedProduct.image_url
+                  ) ? (
+                    <Image
+                      source={{
+                        uri:
+                          getImageUrl(
+                            selectedProduct.image_url
+                          ) || "",
+                      }}
+                      style={
+                        styles.detailsImage
+                      }
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <Text
+                      style={
+                        styles.noImageText
+                      }
+                    >
+                      NEXNET
+                    </Text>
+                  )}
+                </View>
+
+                <Text
+                  style={
+                    styles.detailsType
+                  }
+                >
+                  {selectedProduct.type ||
+                    selectedProduct.category ||
+                    "Ապրանք"}
+                </Text>
+
+                <Text
+                  style={
+                    styles.detailsTitle
+                  }
+                >
+                  {selectedProduct.name}
+                </Text>
+
+                {selectedProduct.model && (
+                  <Text
+                    style={
+                      styles.detailsModel
+                    }
+                  >
+                    {selectedProduct.model}
+                  </Text>
+                )}
+
+                <Text
+                  style={
+                    styles.detailsPrice
+                  }
+                >
+                  {formatPrice(
+                    selectedProduct.price
+                  )}
+                </Text>
+
+                <View
+                  style={
+                    styles.divider
+                  }
+                />
+
+                <Text
+                  style={
+                    styles.sectionTitle
+                  }
+                >
+                  Տեխնիկական տվյալներ
+                </Text>
+
+                <View
+                  style={
+                    styles.specList
+                  }
+                >
+                  {selectedProduct.brand && (
+                    <SpecRow
+                      label="Բրենդ"
+                      value={
+                        selectedProduct.brand
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.model && (
+                    <SpecRow
+                      label="Մոդել"
+                      value={
+                        selectedProduct.model
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.type && (
+                    <SpecRow
+                      label="Տեսակ"
+                      value={
+                        selectedProduct.type
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.megapixel && (
+                    <SpecRow
+                      label="Megapixel"
+                      value={
+                        selectedProduct.megapixel
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.channels && (
+                    <SpecRow
+                      label="Channels"
+                      value={
+                        selectedProduct.channels
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.ports && (
+                    <SpecRow
+                      label="Ports"
+                      value={
+                        selectedProduct.ports
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.capacity && (
+                    <SpecRow
+                      label="Capacity"
+                      value={
+                        selectedProduct.capacity
+                      }
+                    />
+                  )}
+
+                  {selectedProduct.category && (
+                    <SpecRow
+                      label="Կատեգորիա"
+                      value={
+                        selectedProduct.category
+                      }
+                    />
+                  )}
+                </View>
+
+                {selectedProduct.description && (
+                  <>
+                    <Text
+                      style={
+                        styles.sectionTitle
+                      }
+                    >
+                      Նկարագրություն
+                    </Text>
+
+                    <Text
+                      style={
+                        styles.description
+                      }
+                    >
+                      {
+                        selectedProduct.description
+                      }
+                    </Text>
+                  </>
+                )}
+
+                <Pressable
+                  style={
+                    styles.detailsCartButton
+                  }
+                  onPress={() =>
+                    addToCart(
+                      selectedProduct
+                    )
+                  }
+                >
+                  <Text
+                    style={
+                      styles.detailsCartButtonText
+                    }
+                  >
+                    Ավելացնել զամբյուղ
+                  </Text>
+                </Pressable>
+              </ScrollView>
+            </SafeAreaView>
+          )}
+        </Modal>
+
+        <Modal
+          visible={showCart}
+          animationType="slide"
+          onRequestClose={() =>
+            setShowCart(false)
+          }
+        >
+          <SafeAreaView
+            style={styles.modalSafe}
+          >
+            <View style={styles.cartHeader}>
+              <Pressable
+                onPress={() =>
+                  setShowCart(false)
+                }
+              >
+                <Text
+                  style={
+                    styles.backButtonText
+                  }
+                >
+                  ← Կատալոգ
+                </Text>
+              </Pressable>
+
+              <Text
+                style={
+                  styles.cartTitle
+                }
+              >
+                Զամբյուղ
+              </Text>
+            </View>
+
+            <ScrollView
+              contentContainerStyle={
+                styles.cartContainer
+              }
+            >
+              {cart.length === 0 ? (
+                <View
+                  style={
+                    styles.emptyCart
+                  }
+                >
+                  <Text
+                    style={
+                      styles.emptyCartIcon
+                    }
+                  >
+                    🛒
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.emptyCartText
+                    }
+                  >
+                    Զամբյուղը դատարկ է
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  {cart.map((item) => {
+                    const image =
+                      getImageUrl(
+                        item.image_url
+                      );
+
+                    return (
+                      <View
+                        key={item.id}
+                        style={
+                          styles.cartItem
+                        }
+                      >
+                        {image ? (
+                          <Image
+                            source={{
+                              uri: image,
+                            }}
+                            style={
+                              styles.cartImage
+                            }
+                            resizeMode="contain"
+                          />
+                        ) : (
+                          <View
+                            style={
+                              styles.cartNoImage
+                            }
+                          >
+                            <Text>
+                              N
+                            </Text>
+                          </View>
+                        )}
+
+                        <View
+                          style={
+                            styles.cartItemInfo
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.cartItemName
+                            }
+                            numberOfLines={2}
+                          >
+                            {item.name}
+                          </Text>
+
+                          {item.model && (
+                            <Text
+                              style={
+                                styles.cartItemModel
+                              }
+                            >
+                              {item.model}
+                            </Text>
+                          )}
+
+                          <Text
+                            style={
+                              styles.cartItemPrice
+                            }
+                          >
+                            {formatPrice(
+                              item.price
+                            )}
+                          </Text>
+
+                          <View
+                            style={
+                              styles.quantityRow
+                            }
+                          >
+                            <Pressable
+                              style={
+                                styles.quantityButton
+                              }
+                              onPress={() =>
+                                decreaseQuantity(
+                                  item.id
+                                )
+                              }
+                            >
+                              <Text
+                                style={
+                                  styles.quantityButtonText
+                                }
+                              >
+                                −
+                              </Text>
+                            </Pressable>
+
+                            <Text
+                              style={
+                                styles.quantityText
+                              }
+                            >
+                              {item.quantity}
+                            </Text>
+
+                            <Pressable
+                              style={
+                                styles.quantityButton
+                              }
+                              onPress={() =>
+                                increaseQuantity(
+                                  item.id
+                                )
+                              }
+                            >
+                              <Text
+                                style={
+                                  styles.quantityButtonText
+                                }
+                              >
+                                +
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </View>
+
+                        <View
+                          style={
+                            styles.cartItemRight
+                          }
+                        >
+                          <Text
+                            style={
+                              styles.itemTotal
+                            }
+                          >
+                            {formatPrice(
+                              Number(
+                                item.price || 0
+                              ) *
+                                item.quantity
+                            )}
+                          </Text>
+
+                          <Pressable
+                            onPress={() =>
+                              removeFromCart(
+                                item.id
+                              )
+                            }
+                          >
+                            <Text
+                              style={
+                                styles.removeText
+                              }
+                            >
+                              Հեռացնել
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    );
+                  })}
+
+                  <View
+                    style={
+                      styles.summary
+                    }
+                  >
+                    <SummaryRow
+                      label="Ենթագումար"
+                      value={formatPrice(
+                        subtotal
+                      )}
+                    />
+
+                    <SummaryRow
+                      label="Տեղադրման աշխատանք"
+                      value={formatPrice(
+                        installationPrice
+                      )}
+                    />
+
+                    <SummaryRow
+                      label="Զեղչ"
+                      value={formatPrice(
+                        discount
+                      )}
+                    />
+
+                    <View
+                      style={
+                        styles.summaryDivider
+                      }
+                    />
+
+                    <View
+                      style={
+                        styles.totalRow
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.totalLabel
+                        }
+                      >
+                        Ընդհանուր
+                      </Text>
 
                       <Text
                         style={
-                          styles.itemTotal
+                          styles.totalValue
                         }
                       >
                         {formatPrice(
-                          item.price *
-                            item.quantity
+                          finalTotal
                         )}
                       </Text>
                     </View>
 
                     <Pressable
+                      style={
+                        styles.orderButton
+                      }
                       onPress={() =>
-                        removeFromCart(
-                          item.id
+                        Alert.alert(
+                          "Պատվեր",
+                          "Պատվերի ձևակերպումը հաջորդ քայլով կավելացնենք։"
                         )
                       }
                     >
                       <Text
                         style={
-                          styles.removeText
+                          styles.orderButtonText
                         }
                       >
-                        Հեռացնել
+                        Պատվեր ձևակերպել
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={
+                        styles.clearButton
+                      }
+                      onPress={() =>
+                        setCart([])
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.clearButtonText
+                        }
+                      >
+                        Մաքրել զամբյուղը
                       </Text>
                     </Pressable>
                   </View>
-                </View>
-              ))}
-
-              <View
-                style={styles.summary}
-              >
-                <Text
-                  style={
-                    styles.summaryTitle
-                  }
-                >
-                  Ամփոփում
-                </Text>
-
-                <View
-                  style={styles.summaryRow}
-                >
-                  <Text>
-                    Ենթագումար
-                  </Text>
-
-                  <Text>
-                    {formatPrice(
-                      subtotal
-                    )}
-                  </Text>
-                </View>
-
-                <View
-                  style={styles.summaryRow}
-                >
-                  <Text>
-                    Տեղադրման / աշխատանքի գին
-                  </Text>
-
-                  <Text>
-                    0 ֏
-                  </Text>
-                </View>
-
-                <View
-                  style={styles.summaryRow}
-                >
-                  <Text>
-                    Զեղչ
-                  </Text>
-
-                  <Text>
-                    0 ֏
-                  </Text>
-                </View>
-
-                <View
-                  style={
-                    styles.summaryDivider
-                  }
-                />
-
-                <View
-                  style={
-                    styles.summaryTotalRow
-                  }
-                >
-                  <Text
-                    style={
-                      styles.summaryTotalLabel
-                    }
-                  >
-                    Ընդհանուր
-                  </Text>
-
-                  <Text
-                    style={
-                      styles.summaryTotal
-                    }
-                  >
-                    {formatPrice(
-                      subtotal
-                    )}
-                  </Text>
-                </View>
-              </View>
-
-              <Pressable
-                style={
-                  styles.orderButton
-                }
-                onPress={() =>
-                  Alert.alert(
-                    'Պատվեր',
-                    'Պատվերի ձևակերպումը կավելացնենք հաջորդ փուլում։'
-                  )
-                }
-              >
-                <Text
-                  style={
-                    styles.orderButtonText
-                  }
-                >
-                  Պատվեր ձևակերպել
-                </Text>
-              </Pressable>
-
-              <Pressable
-                style={
-                  styles.clearButton
-                }
-                onPress={() =>
-                  setCart([])
-                }
-              >
-                <Text
-                  style={
-                    styles.clearButtonText
-                  }
-                >
-                  Մաքրել զամբյուղը
-                </Text>
-              </Pressable>
+                </>
+              )}
             </ScrollView>
-          )}
-        </SafeAreaView>
-      </Modal>
+          </SafeAreaView>
+        </Modal>
+      </View>
     </SafeAreaView>
   );
 }
 
 function SpecRow({
-  title,
+  label,
   value,
 }: {
-  title: string;
-  value?: string | null;
+  label: string;
+  value: string;
 }) {
-  if (!value) {
-    return null;
-  }
-
   return (
-    <View
-      style={styles.specRow}
-    >
-      <Text
-        style={styles.specTitle}
-      >
-        {title}
+    <View style={styles.specRow}>
+      <Text style={styles.specLabel}>
+        {label}
       </Text>
 
-      <Text
-        style={styles.specValue}
-      >
+      <Text style={styles.specValue}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>
+        {label}
+      </Text>
+
+      <Text style={styles.summaryValue}>
         {value}
       </Text>
     </View>
@@ -1193,584 +1207,571 @@ function SpecRow({
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#f5f7fa",
+  },
+
   container: {
     flex: 1,
-    backgroundColor: '#f5f6f8',
+  },
+
+  header: {
+    minHeight: 78,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    backgroundColor: "#101828",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  logo: {
+    color: "#ffffff",
+    fontSize: 25,
+    fontWeight: "900",
+    letterSpacing: 2,
+  },
+
+  logoSub: {
+    color: "#98a2b3",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 2,
+    marginTop: -2,
+  },
+
+  cartButton: {
+    backgroundColor: "#208AEF",
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 12,
+  },
+
+  cartButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 13,
   },
 
   updateBanner: {
     marginHorizontal: 14,
-    marginTop: 10,
-    padding: 12,
+    marginTop: 12,
+    padding: 13,
     borderRadius: 14,
-    backgroundColor: '#ffffff',
+    backgroundColor: "#e8f3ff",
     borderWidth: 1,
-    borderColor: '#dfe3e8',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    borderColor: "#b7dcff",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
 
-  updateTextContainer: {
+  updateTextBox: {
     flex: 1,
     marginRight: 10,
   },
 
   updateTitle: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '900',
+    color: "#155eef",
+    fontSize: 15,
+    fontWeight: "800",
   },
 
-  updateSubtitle: {
-    color: '#6b7280',
+  updateVersion: {
+    color: "#475467",
+    marginTop: 2,
     fontSize: 12,
-    marginTop: 3,
   },
 
   updateButton: {
-    backgroundColor: '#111827',
-    paddingHorizontal: 14,
+    backgroundColor: "#208AEF",
+    paddingHorizontal: 15,
     paddingVertical: 10,
     borderRadius: 10,
+    minWidth: 90,
+    alignItems: "center",
   },
 
   updateButtonText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-
-  header: {
-    paddingHorizontal: 18,
-    paddingTop: 10,
-    paddingBottom: 14,
-    backgroundColor: '#111827',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-
-  logo: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-
-  logoSubtitle: {
-    color: '#aeb7c7',
-    fontSize: 9,
-    marginTop: 2,
-    letterSpacing: 0.5,
-  },
-
-  cartButton: {
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 12,
-  },
-
-  cartButtonText: {
-    color: '#111827',
-    fontWeight: '800',
-    fontSize: 15,
+    color: "#ffffff",
+    fontWeight: "800",
   },
 
   searchContainer: {
-    marginHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 10,
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    height: 48,
-    flexDirection: 'row',
-    alignItems: 'center',
     paddingHorizontal: 14,
-    borderWidth: 1,
-    borderColor: '#e3e6eb',
-  },
-
-  searchIcon: {
-    fontSize: 18,
-    marginRight: 8,
+    paddingTop: 14,
   },
 
   searchInput: {
-    flex: 1,
-    fontSize: 15,
-    color: '#111827',
+    backgroundColor: "#ffffff",
+    borderRadius: 13,
+    paddingHorizontal: 15,
+    paddingVertical: 13,
+    fontSize: 16,
+    color: "#101828",
+    borderWidth: 1,
+    borderColor: "#e4e7ec",
   },
 
-  catalogHeader: {
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-
-  catalogTitle: {
-    fontSize: 23,
-    fontWeight: '900',
-    color: '#111827',
-  },
-
-  catalogSubtitle: {
-    color: '#707784',
-    marginTop: 3,
-    fontSize: 12,
-  },
-
-  productCount: {
-    backgroundColor: '#111827',
-    color: '#ffffff',
-    minWidth: 32,
-    textAlign: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 9,
-    borderRadius: 10,
-    fontWeight: '800',
-  },
-
-  productList: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
+  productsContainer: {
+    padding: 14,
     paddingBottom: 30,
   },
 
   productCard: {
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
     borderRadius: 18,
     marginBottom: 14,
-    padding: 12,
-    flexDirection: 'row',
+    padding: 13,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: "#eaecf0",
   },
 
-  imageContainer: {
-    width: 125,
-    height: 135,
-    backgroundColor: '#f7f8fa',
+  productImageBox: {
+    height: 190,
     borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 13,
+    backgroundColor: "#f8fafc",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
   },
 
   productImage: {
-    width: '90%',
-    height: '90%',
+    width: "100%",
+    height: "100%",
   },
 
   noImage: {
-    fontSize: 38,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
-  productInfo: {
-    flex: 1,
-    justifyContent: 'center',
+  noImageText: {
+    color: "#98a2b3",
+    fontWeight: "900",
+    letterSpacing: 2,
   },
 
   productType: {
-    fontSize: 11,
-    color: '#6b7280',
-    fontWeight: '700',
-    marginBottom: 4,
+    marginTop: 12,
+    color: "#208AEF",
+    fontSize: 12,
+    fontWeight: "800",
   },
 
   productName: {
-    fontSize: 16,
-    lineHeight: 21,
-    fontWeight: '800',
-    color: '#111827',
+    marginTop: 4,
+    color: "#101828",
+    fontSize: 18,
+    fontWeight: "800",
   },
 
   productModel: {
-    fontSize: 11,
-    color: '#777f8c',
-    marginTop: 4,
+    marginTop: 5,
+    color: "#667085",
+    fontSize: 13,
   },
 
-  productMegapixel: {
-    marginTop: 7,
-    fontSize: 11,
-    color: '#111827',
-    fontWeight: '700',
-  },
-
-  cardBottom: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
+  productSpec: {
+    marginTop: 6,
+    color: "#475467",
+    fontSize: 12,
   },
 
   productPrice: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: '#111827',
+    marginTop: 10,
+    color: "#101828",
+    fontSize: 19,
+    fontWeight: "900",
   },
 
   addButton: {
-    width: 38,
-    height: 38,
+    marginTop: 12,
+    backgroundColor: "#208AEF",
     borderRadius: 12,
-    backgroundColor: '#111827',
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 13,
+    alignItems: "center",
   },
 
   addButtonText: {
-    color: '#ffffff',
-    fontSize: 26,
-    lineHeight: 28,
-    fontWeight: '400',
+    color: "#ffffff",
+    fontWeight: "800",
+    fontSize: 14,
   },
 
-  emptyContainer: {
-    alignItems: 'center',
-    paddingTop: 70,
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 30,
   },
 
-  emptyIcon: {
-    fontSize: 40,
+  loadingText: {
+    marginTop: 12,
+    color: "#667085",
+  },
+
+  errorText: {
+    color: "#b42318",
+    textAlign: "center",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+
+  retryButton: {
+    marginTop: 16,
+    backgroundColor: "#208AEF",
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+
+  retryText: {
+    color: "#ffffff",
+    fontWeight: "800",
   },
 
   emptyText: {
-    marginTop: 12,
-    color: '#6b7280',
+    color: "#667085",
     fontSize: 16,
   },
 
-  modalContainer: {
+  modalSafe: {
     flex: 1,
-    backgroundColor: '#f5f6f8',
+    backgroundColor: "#f5f7fa",
   },
 
-  modalHeader: {
-    height: 60,
-    backgroundColor: '#111827',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-  },
-
-  backButton: {
-    color: '#ffffff',
-    fontSize: 42,
-    lineHeight: 42,
-    width: 40,
-  },
-
-  modalHeaderTitle: {
-    color: '#ffffff',
-    fontSize: 17,
-    fontWeight: '800',
-  },
-
-  detailsContent: {
-    padding: 18,
-    paddingBottom: 40,
-  },
-
-  detailsImageContainer: {
-    height: 280,
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 18,
-  },
-
-  detailsImage: {
-    width: '90%',
-    height: '90%',
-  },
-
-  detailsNoImage: {
-    fontSize: 70,
-  },
-
-  detailsType: {
-    color: '#6b7280',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  detailsName: {
-    color: '#111827',
-    fontSize: 26,
-    lineHeight: 32,
-    fontWeight: '900',
-    marginTop: 5,
-  },
-
-  detailsModel: {
-    color: '#6b7280',
-    fontSize: 14,
-    marginTop: 5,
-  },
-
-  detailsPrice: {
-    color: '#111827',
-    fontSize: 24,
-    fontWeight: '900',
-    marginTop: 15,
-  },
-
-  divider: {
-    height: 1,
-    backgroundColor: '#dfe3e8',
-    marginVertical: 22,
-  },
-
-  sectionTitle: {
-    color: '#111827',
-    fontSize: 18,
-    fontWeight: '900',
-    marginBottom: 12,
-  },
-
-  specs: {
-    backgroundColor: '#ffffff',
-    borderRadius: 15,
-    paddingHorizontal: 15,
-  },
-
-  specRow: {
-    minHeight: 46,
-    borderBottomWidth: 1,
-    borderBottomColor: '#edf0f3',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 15,
-  },
-
-  specTitle: {
-    color: '#6b7280',
-    fontSize: 13,
-  },
-
-  specValue: {
-    color: '#111827',
-    fontSize: 13,
-    fontWeight: '800',
-    flexShrink: 1,
-    textAlign: 'right',
-  },
-
-  description: {
-    backgroundColor: '#ffffff',
-    padding: 15,
-    borderRadius: 15,
-    color: '#4b5563',
-    fontSize: 14,
-    lineHeight: 21,
-  },
-
-  detailsAddButton: {
-    marginTop: 25,
-    height: 54,
-    backgroundColor: '#111827',
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  detailsAddButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '900',
-  },
-
-  cartContent: {
+  detailsContainer: {
     padding: 16,
     paddingBottom: 40,
   },
 
-  cartItem: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    padding: 12,
-    flexDirection: 'row',
-    marginBottom: 12,
+  backButton: {
+    alignSelf: "flex-start",
+    marginBottom: 14,
   },
 
-  cartImageContainer: {
-    width: 90,
-    height: 90,
-    borderRadius: 12,
-    backgroundColor: '#f5f6f8',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
+  backButtonText: {
+    color: "#208AEF",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+
+  detailsImageBox: {
+    height: 270,
+    backgroundColor: "#ffffff",
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+
+  detailsImage: {
+    width: "100%",
+    height: "100%",
+  },
+
+  detailsType: {
+    marginTop: 18,
+    color: "#208AEF",
+    fontSize: 13,
+    fontWeight: "800",
+  },
+
+  detailsTitle: {
+    marginTop: 5,
+    color: "#101828",
+    fontSize: 25,
+    fontWeight: "900",
+    lineHeight: 31,
+  },
+
+  detailsModel: {
+    marginTop: 6,
+    color: "#667085",
+    fontSize: 14,
+  },
+
+  detailsPrice: {
+    marginTop: 12,
+    color: "#101828",
+    fontSize: 24,
+    fontWeight: "900",
+  },
+
+  divider: {
+    height: 1,
+    backgroundColor: "#e4e7ec",
+    marginVertical: 20,
+  },
+
+  sectionTitle: {
+    color: "#101828",
+    fontSize: 18,
+    fontWeight: "900",
+    marginBottom: 10,
+  },
+
+  specList: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    overflow: "hidden",
+  },
+
+  specRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f2f4f7",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 15,
+  },
+
+  specLabel: {
+    color: "#667085",
+    fontSize: 13,
+    flex: 1,
+  },
+
+  specValue: {
+    color: "#101828",
+    fontSize: 13,
+    fontWeight: "700",
+    flex: 1,
+    textAlign: "right",
+  },
+
+  description: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    padding: 14,
+    color: "#475467",
+    fontSize: 14,
+    lineHeight: 22,
+  },
+
+  detailsCartButton: {
+    marginTop: 20,
+    backgroundColor: "#208AEF",
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: "center",
+  },
+
+  detailsCartButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "900",
+  },
+
+  cartHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    backgroundColor: "#ffffff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e4e7ec",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 20,
+  },
+
+  cartTitle: {
+    color: "#101828",
+    fontSize: 21,
+    fontWeight: "900",
+  },
+
+  cartContainer: {
+    padding: 14,
+    paddingBottom: 40,
+  },
+
+  emptyCart: {
+    alignItems: "center",
+    paddingTop: 80,
+  },
+
+  emptyCartIcon: {
+    fontSize: 50,
+  },
+
+  emptyCartText: {
+    marginTop: 15,
+    color: "#667085",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+
+  cartItem: {
+    backgroundColor: "#ffffff",
+    borderRadius: 15,
+    padding: 11,
+    marginBottom: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#eaecf0",
   },
 
   cartImage: {
-    width: '90%',
-    height: '90%',
+    width: 75,
+    height: 75,
+    borderRadius: 10,
+    backgroundColor: "#f8fafc",
+  },
+
+  cartNoImage: {
+    width: 75,
+    height: 75,
+    borderRadius: 10,
+    backgroundColor: "#f2f4f7",
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   cartItemInfo: {
     flex: 1,
+    marginHorizontal: 10,
   },
 
   cartItemName: {
-    color: '#111827',
+    color: "#101828",
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: "800",
   },
 
   cartItemModel: {
-    color: '#737b87',
+    color: "#667085",
     fontSize: 11,
     marginTop: 3,
   },
 
   cartItemPrice: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '900',
+    color: "#101828",
+    fontSize: 13,
+    fontWeight: "800",
     marginTop: 5,
   },
 
   quantityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     marginTop: 8,
   },
 
   quantityButton: {
-    width: 30,
-    height: 30,
+    width: 32,
+    height: 32,
     borderRadius: 8,
-    backgroundColor: '#eef0f3',
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: "#eef4ff",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  quantityButtonText: {
+    color: "#155eef",
+    fontSize: 20,
+    fontWeight: "800",
   },
 
   quantityText: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#111827',
+    width: 35,
+    textAlign: "center",
+    color: "#101828",
+    fontWeight: "800",
   },
 
-  quantityValue: {
-    width: 35,
-    textAlign: 'center',
-    fontWeight: '800',
+  cartItemRight: {
+    alignItems: "flex-end",
   },
 
   itemTotal: {
-    marginLeft: 'auto',
+    color: "#101828",
     fontSize: 13,
-    fontWeight: '900',
-    color: '#111827',
+    fontWeight: "900",
   },
 
   removeText: {
-    marginTop: 7,
-    color: '#777f8c',
+    color: "#d92d20",
     fontSize: 11,
+    marginTop: 10,
+    fontWeight: "700",
   },
 
   summary: {
-    backgroundColor: '#ffffff',
+    backgroundColor: "#ffffff",
     borderRadius: 16,
-    padding: 17,
-    marginTop: 5,
-  },
-
-  summaryTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    marginBottom: 15,
-    color: '#111827',
+    marginTop: 8,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#eaecf0",
   },
 
   summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 11,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+
+  summaryLabel: {
+    color: "#667085",
+    fontSize: 13,
+  },
+
+  summaryValue: {
+    color: "#344054",
+    fontSize: 13,
+    fontWeight: "700",
   },
 
   summaryDivider: {
     height: 1,
-    backgroundColor: '#e5e7eb',
-    marginVertical: 6,
+    backgroundColor: "#e4e7ec",
+    marginVertical: 8,
   },
 
-  summaryTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 5,
+  totalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
 
-  summaryTotalLabel: {
-    fontSize: 17,
-    fontWeight: '900',
-    color: '#111827',
+  totalLabel: {
+    color: "#101828",
+    fontSize: 18,
+    fontWeight: "900",
   },
 
-  summaryTotal: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: '#111827',
+  totalValue: {
+    color: "#101828",
+    fontSize: 21,
+    fontWeight: "900",
   },
 
   orderButton: {
-    height: 54,
-    backgroundColor: '#111827',
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
+    marginTop: 18,
+    backgroundColor: "#208AEF",
+    borderRadius: 13,
+    paddingVertical: 14,
+    alignItems: "center",
   },
 
   orderButtonText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '900',
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "900",
   },
 
   clearButton: {
-    alignItems: 'center',
-    paddingVertical: 16,
+    marginTop: 10,
+    paddingVertical: 12,
+    alignItems: "center",
   },
 
   clearButtonText: {
-    color: '#6b7280',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  emptyCart: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 30,
-  },
-
-  emptyCartIcon: {
-    fontSize: 60,
-  },
-
-  emptyCartTitle: {
-    fontSize: 21,
-    fontWeight: '900',
-    color: '#111827',
-    marginTop: 15,
-  },
-
-  emptyCartText: {
-    color: '#6b7280',
-    marginTop: 7,
-    textAlign: 'center',
+    color: "#d92d20",
+    fontWeight: "800",
   },
 });
