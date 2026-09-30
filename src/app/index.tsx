@@ -1,11 +1,11 @@
 import Constants from "expo-constants";
 import * as FileSystem from "expo-file-system/legacy";
+import * as IntentLauncher from "expo-intent-launcher";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Modal,
   Pressable,
   SafeAreaView,
@@ -37,13 +37,72 @@ type CartItem = Product & {
   quantity: number;
 };
 
-const API_URL = "https://pure-fine-exceptions-voices.trycloudflare.com";
+const API_URL =
+  "https://pure-fine-exceptions-voices.trycloudflare.com";
 
 const CURRENT_VERSION =
-  Constants.expoConfig?.version || "1.0.1";
+  Constants.expoConfig?.version || "1.0.2";
 
 const UPDATE_URL =
   "https://raw.githubusercontent.com/harutarmcom-wq/NexNetApp/main/update.json";
+
+const categories = [
+  {
+    name: "IP Camera",
+    title: "IP CAMERA",
+    icon: "📹",
+  },
+  {
+    name: "DVR",
+    title: "DVR",
+    icon: "🎥",
+  },
+  {
+    name: "NVR",
+    title: "NVR",
+    icon: "🖥",
+  },
+  {
+    name: "PoE",
+    title: "PoE",
+    icon: "⚡",
+  },
+  {
+    name: "Intercom",
+    title: "INTERCOM",
+    icon: "🔔",
+  },
+  {
+    name: "HDD",
+    title: "HDD",
+    icon: "💾",
+  },
+  {
+    name: "Accessories",
+    title: "ACCESSORIES",
+    icon: "🔌",
+  },
+  {
+    name: "Switch",
+    title: "SWITCH",
+    icon: "🌐",
+  },
+  {
+    name: "Router",
+    title: "ROUTER",
+    icon: "📡",
+  },
+  {
+    name: "Access Control",
+    title: "ACCESS CONTROL",
+    icon: "🔐",
+  },
+  {
+    name: "Other",
+    title: "OTHER",
+    icon: "📦",
+  },
+];
 
 function getImageUrl(imageUrl?: string | null) {
   if (!imageUrl) {
@@ -63,13 +122,8 @@ function isNewerVersion(
   latestVersion: string,
   currentVersion: string
 ) {
-  const latest = latestVersion
-    .split(".")
-    .map(Number);
-
-  const current = currentVersion
-    .split(".")
-    .map(Number);
+  const latest = latestVersion.split(".").map(Number);
+  const current = currentVersion.split(".").map(Number);
 
   for (let i = 0; i < 3; i++) {
     const latestPart = latest[i] || 0;
@@ -92,13 +146,15 @@ export default function HomeScreen() {
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [productsError, setProductsError] = useState("");
 
+  const [selectedCategory, setSelectedCategory] =
+    useState<string | null>(null);
+
   const [search, setSearch] = useState("");
 
   const [selectedProduct, setSelectedProduct] =
     useState<Product | null>(null);
 
   const [cart, setCart] = useState<CartItem[]>([]);
-
   const [showCart, setShowCart] = useState(false);
 
   const [latestVersion, setLatestVersion] =
@@ -109,6 +165,9 @@ export default function HomeScreen() {
 
   const [downloadingUpdate, setDownloadingUpdate] =
     useState(false);
+
+  const [updateProgress, setUpdateProgress] =
+    useState(0);
 
   async function loadProducts() {
     try {
@@ -169,12 +228,16 @@ export default function HomeScreen() {
   }
 
   async function downloadAndInstallUpdate() {
-    if (!latestApkUrl || downloadingUpdate) {
+    if (
+      !latestApkUrl ||
+      downloadingUpdate
+    ) {
       return;
     }
 
     try {
       setDownloadingUpdate(true);
+      setUpdateProgress(0);
 
       const filename =
         `NEXNET-${latestVersion || "update"}.apk`;
@@ -182,28 +245,59 @@ export default function HomeScreen() {
       const destination =
         `${FileSystem.cacheDirectory}${filename}`;
 
-      const downloadResult =
-        await FileSystem.downloadAsync(
+      const downloadResumable =
+        FileSystem.createDownloadResumable(
           latestApkUrl,
-          destination
+          destination,
+          {},
+          (downloadProgress) => {
+            const total =
+              downloadProgress.totalBytesExpectedToWrite;
+
+            const written =
+              downloadProgress.totalBytesWritten;
+
+            if (total > 0) {
+              const percent =
+                Math.round(
+                  (written / total) * 100
+                );
+
+              setUpdateProgress(percent);
+            }
+          }
         );
 
-      if (
-        !downloadResult.uri
-      ) {
+      const result =
+        await downloadResumable.downloadAsync();
+
+      if (!result?.uri) {
         throw new Error(
           "APK download failed"
         );
       }
 
+      setUpdateProgress(100);
+
       const contentUri =
         await FileSystem.getContentUriAsync(
-          downloadResult.uri
+          result.uri
         );
 
-      await Linking.openURL(contentUri);
+      await IntentLauncher.startActivityAsync(
+        "android.intent.action.VIEW",
+        {
+          data: contentUri,
+          type:
+            "application/vnd.android.package-archive",
+          flags: 1,
+        }
+      );
     } catch (error) {
-      console.error(error);
+      console.error(
+        "Update installation error:",
+        error
+      );
 
       Alert.alert(
         "Թարմացման սխալ",
@@ -211,6 +305,7 @@ export default function HomeScreen() {
       );
     } finally {
       setDownloadingUpdate(false);
+      setUpdateProgress(0);
     }
   }
 
@@ -219,34 +314,46 @@ export default function HomeScreen() {
     checkForUpdate();
   }, []);
 
-  const filteredProducts =
-    useMemo(() => {
-      const query =
-        search.trim().toLowerCase();
+  const filteredProducts = useMemo(() => {
+    const query =
+      search.trim().toLowerCase();
 
-      if (!query) {
-        return products;
+    return products.filter((product) => {
+      const categoryMatch =
+        !selectedCategory ||
+        product.category === selectedCategory;
+
+      if (!categoryMatch) {
+        return false;
       }
 
-      return products.filter(
-        (product) => {
-          const text = [
-            product.name,
-            product.model,
-            product.brand,
-            product.category,
-            product.type,
-            product.megapixel,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
+      if (!query) {
+        return true;
+      }
 
-          return text.includes(query);
-        }
-      );
-    },
-    [products, search]);
+      const text = [
+        product.name,
+        product.model,
+        product.brand,
+        product.category,
+        product.type,
+        product.megapixel,
+        product.channels,
+        product.ports,
+        product.capacity,
+        product.description,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return text.includes(query);
+    });
+  }, [
+    products,
+    selectedCategory,
+    search,
+  ]);
 
   const cartCount = cart.reduce(
     (total, item) =>
@@ -334,8 +441,7 @@ export default function HomeScreen() {
             : item
         )
         .filter(
-          (item) =>
-            item.quantity > 0
+          (item) => item.quantity > 0
         )
     );
   }
@@ -352,16 +458,322 @@ export default function HomeScreen() {
   }
 
   function formatPrice(price: number) {
-    return `${Number(price || 0).toLocaleString(
-      "en-US"
-    )} ֏`;
+    return `${Number(
+      price || 0
+    ).toLocaleString("en-US")} ֏`;
+  }
+
+  function openCategory(
+    categoryName: string
+  ) {
+    setSearch("");
+    setSelectedCategory(categoryName);
+  }
+
+  function goHome() {
+    setSelectedCategory(null);
+    setSearch("");
+  }
+
+  function renderHomeCategories() {
+    return (
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={
+          styles.homeContainer
+        }
+      >
+        <View style={styles.welcomeSection}>
+          <Text style={styles.welcomeTitle}>
+            NEXNET SECURITY
+          </Text>
+
+          <Text style={styles.welcomeSubtitle}>
+            IT • NETWORK • SECURITY
+          </Text>
+
+          <Text style={styles.chooseText}>
+            Ընտրիր ապրանքի կատեգորիան
+          </Text>
+        </View>
+
+        <View style={styles.categoryList}>
+          {categories.map((category) => (
+            <Pressable
+              key={category.name}
+              style={({ pressed }) => [
+                styles.categoryButton,
+                pressed &&
+                  styles.categoryButtonPressed,
+              ]}
+              onPress={() =>
+                openCategory(
+                  category.name
+                )
+              }
+            >
+              <View
+                style={
+                  styles.categoryIconBox
+                }
+              >
+                <Text
+                  style={
+                    styles.categoryIcon
+                  }
+                >
+                  {category.icon}
+                </Text>
+              </View>
+
+              <Text
+                style={
+                  styles.categoryButtonText
+                }
+              >
+                {category.title}
+              </Text>
+
+              <Text
+                style={
+                  styles.categoryArrow
+                }
+              >
+                ›
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </ScrollView>
+    );
+  }
+
+  function renderProducts() {
+    return (
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={
+          styles.productsContainer
+        }
+      >
+        <Pressable
+          style={styles.backToCategories}
+          onPress={goHome}
+        >
+          <Text
+            style={
+              styles.backToCategoriesText
+            }
+          >
+            ← Կատեգորիաներ
+          </Text>
+        </Pressable>
+
+        <View style={styles.categoryHeader}>
+          <View>
+            <Text
+              style={
+                styles.categoryHeaderTitle
+              }
+            >
+              {
+                categories.find(
+                  (item) =>
+                    item.name ===
+                    selectedCategory
+                )?.icon
+              }{" "}
+              {
+                categories.find(
+                  (item) =>
+                    item.name ===
+                    selectedCategory
+                )?.title
+              }
+            </Text>
+
+            <Text
+              style={
+                styles.categoryHeaderCount
+              }
+            >
+              {filteredProducts.length} ապրանք
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={styles.searchContainer}
+        >
+          < TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Փնտրել ապրանք..."
+            placeholderTextColor="#8b8f98"
+            style={styles.searchInput}
+          />
+        </View>
+
+        {filteredProducts.length ===
+        0 ? (
+          <View style={styles.emptyCategory}>
+            <Text
+              style={styles.emptyCategoryIcon}
+            >
+              📦
+            </Text>
+
+            <Text
+              style={
+                styles.emptyCategoryTitle
+              }
+            >
+              Ապրանքներ չկան
+            </Text>
+
+            <Text
+              style={
+                styles.emptyCategoryText
+              }
+            >
+              Այս կատեգորիայում դեռ ապրանք չկա։
+            </Text>
+          </View>
+        ) : (
+          filteredProducts.map(
+            (product) => {
+              const image =
+                getImageUrl(
+                  product.image_url
+                );
+
+              return (
+                <Pressable
+                  key={product.id}
+                  style={styles.productCard}
+                  onPress={() =>
+                    setSelectedProduct(
+                      product
+                    )
+                  }
+                >
+                  <View
+                    style={
+                      styles.productImageBox
+                    }
+                  >
+                    {image ? (
+                      <Image
+                        source={{
+                          uri: image,
+                        }}
+                        style={
+                          styles.productImage
+                        }
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View
+                        style={
+                          styles.noImage
+                        }
+                      >
+                        <Text
+                          style={
+                            styles.noImageText
+                          }
+                        >
+                          NEXNET
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <Text
+                    style={
+                      styles.productType
+                    }
+                  >
+                    {product.type ||
+                      product.category ||
+                      "Ապրանք"}
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.productName
+                    }
+                    numberOfLines={2}
+                  >
+                    {product.name}
+                  </Text>
+
+                  {product.model && (
+                    <Text
+                      style={
+                        styles.productModel
+                      }
+                      numberOfLines={1}
+                    >
+                      {product.model}
+                    </Text>
+                  )}
+
+                  {product.megapixel && (
+                    <Text
+                      style={
+                        styles.productSpec
+                      }
+                    >
+                      {product.megapixel}
+                    </Text>
+                  )}
+
+                  <Text
+                    style={
+                      styles.productPrice
+                    }
+                  >
+                    {formatPrice(
+                      product.price
+                    )}
+                  </Text>
+
+                  <Pressable
+                    style={
+                      styles.addButton
+                    }
+                    onPress={() =>
+                      addToCart(product)
+                    }
+                  >
+                    <Text
+                      style={
+                        styles.addButtonText
+                      }
+                    >
+                      🛒 Ավելացնել զամբյուղ
+                    </Text>
+                  </Pressable>
+                </Pressable>
+              );
+            }
+          )
+        )}
+      </ScrollView>
+    );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
       <View style={styles.container}>
         <View style={styles.header}>
-          <View>
+          <Pressable
+            onPress={goHome}
+            style={styles.logoContainer}
+          >
             <Text style={styles.logo}>
               NEXNET
             </Text>
@@ -369,7 +781,7 @@ export default function HomeScreen() {
             <Text style={styles.logoSub}>
               SECURITY
             </Text>
-          </View>
+          </Pressable>
 
           <Pressable
             style={styles.cartButton}
@@ -377,26 +789,60 @@ export default function HomeScreen() {
               setShowCart(true)
             }
           >
-            <Text style={styles.cartButtonText}>
-              🛒 Զամբյուղ ({cartCount})
+            <Text
+              style={
+                styles.cartButtonText
+              }
+            >
+              🛒 {cartCount}
             </Text>
           </Pressable>
         </View>
 
         {latestVersion && (
-          <View style={styles.updateBanner}>
-            <View style={styles.updateTextBox}>
-              <Text style={styles.updateTitle}>
+          <View
+            style={
+              styles.updateBanner
+            }
+          >
+            <View
+              style={
+                styles.updateTextBox
+              }
+            >
+              <Text
+                style={
+                  styles.updateTitle
+                }
+              >
                 🔔 Նոր տարբերակ կա
               </Text>
 
-              <Text style={styles.updateVersion}>
+              <Text
+                style={
+                  styles.updateVersion
+                }
+              >
                 NEXNET {latestVersion}
               </Text>
+
+              {downloadingUpdate && (
+                <Text
+                  style={
+                    styles.downloadProgress
+                  }
+                >
+                  {updateProgress > 0
+                    ? `Ներբեռնում ${updateProgress}%`
+                    : "Ներբեռնում..."}
+                </Text>
+              )}
             </View>
 
             <Pressable
-              style={styles.updateButton}
+              style={
+                styles.updateButton
+              }
               onPress={
                 downloadAndInstallUpdate
               }
@@ -419,16 +865,6 @@ export default function HomeScreen() {
           </View>
         )}
 
-        <View style={styles.searchContainer}>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Փնտրել ապրանք..."
-            placeholderTextColor="#8b8f98"
-            style={styles.searchInput}
-          />
-        </View>
-
         {loadingProducts ? (
           <View style={styles.center}>
             <ActivityIndicator
@@ -436,165 +872,41 @@ export default function HomeScreen() {
               color="#208AEF"
             />
 
-            <Text style={styles.loadingText}>
+            <Text
+              style={
+                styles.loadingText
+              }
+            >
               Ապրանքները բեռնվում են...
             </Text>
           </View>
         ) : productsError ? (
           <View style={styles.center}>
-            <Text style={styles.errorText}>
+            <Text
+              style={styles.errorText}
+            >
               {productsError}
             </Text>
 
             <Pressable
-              style={styles.retryButton}
+              style={
+                styles.retryButton
+              }
               onPress={loadProducts}
             >
-              <Text style={styles.retryText}>
+              <Text
+                style={
+                  styles.retryText
+                }
+              >
                 Կրկին փորձել
               </Text>
             </Pressable>
           </View>
+        ) : selectedCategory ? (
+          renderProducts()
         ) : (
-          <ScrollView
-            showsVerticalScrollIndicator={
-              false
-            }
-            contentContainerStyle={
-              styles.productsContainer
-            }
-          >
-            {filteredProducts.length ===
-            0 ? (
-              <View style={styles.center}>
-                <Text style={styles.emptyText}>
-                  Ապրանք չի գտնվել։
-                </Text>
-              </View>
-            ) : (
-              filteredProducts.map(
-                (product) => {
-                  const image =
-                    getImageUrl(
-                      product.image_url
-                    );
-
-                  return (
-                    <Pressable
-                      key={product.id}
-                      style={
-                        styles.productCard
-                      }
-                      onPress={() =>
-                        setSelectedProduct(
-                          product
-                        )
-                      }
-                    >
-                      <View
-                        style={
-                          styles.productImageBox
-                        }
-                      >
-                        {image ? (
-                          <Image
-                            source={{
-                              uri: image,
-                            }}
-                            style={
-                              styles.productImage
-                            }
-                            resizeMode="contain"
-                          />
-                        ) : (
-                          <View
-                            style={
-                              styles.noImage
-                            }
-                          >
-                            <Text
-                              style={
-                                styles.noImageText
-                              }
-                            >
-                              NEXNET
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-
-                      <Text
-                        style={
-                          styles.productType
-                        }
-                      >
-                        {product.type ||
-                          product.category ||
-                          "Ապրանք"}
-                      </Text>
-
-                      <Text
-                        style={
-                          styles.productName
-                        }
-                        numberOfLines={2}
-                      >
-                        {product.name}
-                      </Text>
-
-                      {product.model && (
-                        <Text
-                          style={
-                            styles.productModel
-                          }
-                          numberOfLines={1}
-                        >
-                          {product.model}
-                        </Text>
-                      )}
-
-                      {product.megapixel && (
-                        <Text
-                          style={
-                            styles.productSpec
-                          }
-                        >
-                          {product.megapixel}
-                        </Text>
-                      )}
-
-                      <Text
-                        style={
-                          styles.productPrice
-                        }
-                      >
-                        {formatPrice(
-                          product.price
-                        )}
-                      </Text>
-
-                      <Pressable
-                        style={
-                          styles.addButton
-                        }
-                        onPress={() =>
-                          addToCart(product)
-                        }
-                      >
-                        <Text
-                          style={
-                            styles.addButtonText
-                          }
-                        >
-                          Ավելացնել զամբյուղ
-                        </Text>
-                      </Pressable>
-                    </Pressable>
-                  );
-                }
-              )
-            )}
-          </ScrollView>
+          renderHomeCategories()
         )}
 
         <Modal
@@ -704,9 +1016,7 @@ export default function HomeScreen() {
                 </Text>
 
                 <View
-                  style={
-                    styles.divider
-                  }
+                  style={styles.divider}
                 />
 
                 <Text
@@ -832,7 +1142,7 @@ export default function HomeScreen() {
                       styles.detailsCartButtonText
                     }
                   >
-                    Ավելացնել զամբյուղ
+                    🛒 Ավելացնել զամբյուղ
                   </Text>
                 </Pressable>
               </ScrollView>
@@ -850,7 +1160,11 @@ export default function HomeScreen() {
           <SafeAreaView
             style={styles.modalSafe}
           >
-            <View style={styles.cartHeader}>
+            <View
+              style={
+                styles.cartHeader
+              }
+            >
               <Pressable
                 onPress={() =>
                   setShowCart(false)
@@ -1226,6 +1540,10 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
 
+  logoContainer: {
+    paddingVertical: 3,
+  },
+
   logo: {
     color: "#ffffff",
     fontSize: 25,
@@ -1243,15 +1561,17 @@ const styles = StyleSheet.create({
 
   cartButton: {
     backgroundColor: "#208AEF",
-    paddingHorizontal: 14,
+    paddingHorizontal: 15,
     paddingVertical: 11,
     borderRadius: 12,
+    minWidth: 58,
+    alignItems: "center",
   },
 
   cartButtonText: {
     color: "#ffffff",
     fontWeight: "800",
-    fontSize: 13,
+    fontSize: 14,
   },
 
   updateBanner: {
@@ -1284,6 +1604,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 
+  downloadProgress: {
+    color: "#155eef",
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
   updateButton: {
     backgroundColor: "#208AEF",
     paddingHorizontal: 15,
@@ -1298,9 +1625,116 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  searchContainer: {
+  homeContainer: {
+    padding: 16,
+    paddingBottom: 35,
+  },
+
+  welcomeSection: {
+    paddingTop: 12,
+    paddingBottom: 18,
+  },
+
+  welcomeTitle: {
+    color: "#101828",
+    fontSize: 27,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+
+  welcomeSubtitle: {
+    color: "#667085",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 1.5,
+    marginTop: 2,
+  },
+
+  chooseText: {
+    color: "#344054",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 20,
+  },
+
+  categoryList: {
+    gap: 11,
+  },
+
+  categoryButton: {
+    minHeight: 70,
+    backgroundColor: "#ffffff",
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: "#e4e7ec",
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 14,
-    paddingTop: 14,
+  },
+
+  categoryButtonPressed: {
+    backgroundColor: "#eef6ff",
+    borderColor: "#208AEF",
+  },
+
+  categoryIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "#f2f7ff",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 14,
+  },
+
+  categoryIcon: {
+    fontSize: 25,
+  },
+
+  categoryButtonText: {
+    flex: 1,
+    color: "#101828",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+
+  categoryArrow: {
+    color: "#98a2b3",
+    fontSize: 30,
+    fontWeight: "300",
+  },
+
+  backToCategories: {
+    marginBottom: 12,
+    paddingVertical: 5,
+  },
+
+  backToCategoriesText: {
+    color: "#208AEF",
+    fontSize: 15,
+    fontWeight: "800",
+  },
+
+  categoryHeader: {
+    paddingBottom: 4,
+  },
+
+  categoryHeaderTitle: {
+    color: "#101828",
+    fontSize: 25,
+    fontWeight: "900",
+  },
+
+  categoryHeaderCount: {
+    color: "#667085",
+    fontSize: 13,
+    marginTop: 3,
+  },
+
+  searchContainer: {
+    paddingTop: 12,
+    paddingBottom: 12,
   },
 
   searchInput: {
@@ -1316,7 +1750,7 @@ const styles = StyleSheet.create({
 
   productsContainer: {
     padding: 14,
-    paddingBottom: 30,
+    paddingBottom: 35,
   },
 
   productCard: {
@@ -1432,9 +1866,28 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
 
-  emptyText: {
+  emptyCategory: {
+    alignItems: "center",
+    paddingTop: 65,
+    paddingHorizontal: 25,
+  },
+
+  emptyCategoryIcon: {
+    fontSize: 48,
+  },
+
+  emptyCategoryTitle: {
+    marginTop: 15,
+    color: "#101828",
+    fontSize: 19,
+    fontWeight: "900",
+  },
+
+  emptyCategoryText: {
+    marginTop: 6,
     color: "#667085",
-    fontSize: 16,
+    fontSize: 14,
+    textAlign: "center",
   },
 
   modalSafe: {
